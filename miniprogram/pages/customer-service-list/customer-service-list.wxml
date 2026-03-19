@@ -1,0 +1,38 @@
+<view class="container">
+  <view class="message-list">
+    <view 
+      wx:for="{{messageList}}" 
+      wx:key="openid" 
+      class="message-item"
+      bindtap="goToChat"
+      data-openid="{{item.openid}}"
+    >
+      <view class="avatar-wrapper">
+        <image class="avatar" src="/images/icons/avatar.png" mode="aspectFill"></image>
+      </view>
+      
+      <view class="content-wrapper">
+        <view class="top-row">
+          <text class="nickname">用户</text>
+          <text class="time">{{item.last_time}}</text>
+        </view>
+        <view class="bottom-row">
+          <text class="last-message" decode="true">
+            {{item.last_message}}
+          </text>
+          <view class="badge" wx:if="{{item.message_count > 0}}">
+            {{item.message_count}}
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{messageList.length === 0 && !loading}}" class="empty">
+      <text class="empty-text">暂无客服消息</text>
+    </view>
+
+    <view wx:if="{{loading}}" class="loading">
+      <text>加载中...</text>
+    </view>
+  </view>
+</view>

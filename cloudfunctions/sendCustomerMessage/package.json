@@ -1,0 +1,12 @@
+{
+  "name": "sendCustomerMessage",
+  "version": "1.0.0",
+  "description": "发送客服消息云函数",
+  "main": "index.js",
+  "scripts": {},
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3"
+  }
+}

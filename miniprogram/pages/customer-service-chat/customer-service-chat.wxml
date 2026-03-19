@@ -1,0 +1,81 @@
+<view class="container">
+  <!-- 消息列表 -->
+  <scroll-view 
+    class="message-scroll" 
+    scroll-y 
+    scroll-into-view="{{scrollToBottom ? 'last-message' : ''}}"
+    scroll-with-animation
+  >
+    <view wx:if="{{loading}}" class="loading">
+      <text>加载中...</text>
+    </view>
+
+    <view wx:if="{{messages.length === 0 && !loading}}" class="empty">
+      <text class="empty-text">暂无消息</text>
+    </view>
+
+    <view 
+      wx:for="{{messages}}" 
+      wx:key="created_at"
+      wx:for-item="message"
+      id="{{index === messages.length - 1 ? 'last-message' : ''}}"
+      class="message-item {{message.type === 'customer_to_user' || message.sending ? 'self' : 'other'}}"
+    >
+      <image 
+        class="avatar" 
+        src="{{message.type === 'customer_to_user' || message.sending ? '/images/icons/avatar.png' : '/images/avatar.png'}}" 
+        mode="aspectFill"
+      ></image>
+      
+      <view class="message-content">
+        <text class="time">{{formatTime(message.created_at)}}</text>
+        
+        <!-- 文本消息 -->
+        <view wx:if="{{message.msg_type === 'text'}}" class="text-message">
+          <text>{{message.content}}</text>
+        </view>
+        
+        <!-- 图片消息 -->
+        <image 
+          wx:if="{{message.msg_type === 'image'}}" 
+          class="image-message" 
+          src="{{message.image_url}}"
+          mode="widthFix"
+          bindtap="previewImage"
+          data-url="{{message.image_url}}"
+        ></image>
+        
+        <!-- 小程序卡片消息 -->
+        <view wx:if="{{message.msg_type === 'miniprogramapp'}}" class="card-message">
+          <view class="card-title">{{message.content}}</view>
+          <view class="card-path">小程序</view>
+        </view>
+        
+        <!-- 发送中状态 -->
+        <view wx:if="{{message.sending}}" class="sending">
+          <text>发送中...</text>
+        </view>
+      </view>
+    </view>
+  </scroll-view>
+
+  <!-- 输入框 -->
+  <view class="input-wrapper">
+    <input 
+      class="input" 
+      placeholder="请输入消息" 
+      value="{{inputContent}}" 
+      bindinput="onInput"
+      confirm-type="send"
+      bindconfirm="sendMessage"
+    />
+    <button 
+      class="send-btn {{inputContent.trim() ? 'active' : ''}}" 
+      size="mini" 
+      bindtap="sendMessage"
+      disabled="{{!inputContent.trim()}}"
+    >
+      发送
+    </button>
+  </view>
+</view>

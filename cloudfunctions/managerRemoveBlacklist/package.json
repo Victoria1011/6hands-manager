@@ -1,0 +1,10 @@
+{
+  "name": "managerRemoveBlacklist",
+  "version": "1.0.0",
+  "description": "从黑名单移除用户",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3",
+    "jsonwebtoken": "^8.5.1"
+  }
+}

@@ -5,6 +5,7 @@
 
 .message-list {
   padding-top: 16rpx;
+  width: 100%;
 }
 
 .message-item {

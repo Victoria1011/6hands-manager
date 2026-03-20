@@ -1,55 +1,42 @@
-<!--index.wxml-->
 <view class="container">
-  <!-- 登录弹窗 -->
-  <view wx:if="{{showLoginModal}}" class="login-modal-mask">
-    <view class="login-modal">
-      <view class="login-modal-content">
-        <view class="login-icon">👋</view>
-        <view class="login-title">欢迎使用</view>
-        <view class="login-desc">请先登录以使用服务</view>
-        <button class="login-btn" bindtap="handleLogin">立即登录</button>
+  <!-- 主内容区域 -->
+  <view class="main-content">
+    <!-- 标题 -->
+    <view class="page-title">
+      <text class="title-text">管理后台</text>
+    </view>
+
+    <!-- 用户查询 -->
+    <view class="query-section">
+      <view class="section-header">
+        <text class="section-title">用户查询</text>
+      </view>
+      <view class="query-form">
+        <view class="input-wrapper">
+          <input
+            class="query-input"
+            placeholder="请输入用户 openid"
+            value="{{openidInput}}"
+            bindinput="onOpenidInput"
+          />
+        </view>
+        <button class="query-btn" bindtap="onUserQuery">
+          查询用户
+        </button>
       </view>
     </view>
-  </view>
 
-  <!-- 加载状态 -->
-  <view wx:elif="{{loading}}" class="loading-container">
-    <text class="loading-text">登录中...</text>
-  </view>
-
-  <!-- 正常内容 -->
-  <view wx:else style="width: 100%;">
-    <view class="header">
-      <view class="title">服务中心</view>
-      <view class="subtitle">为您提供便捷的服务</view>
-    </view>
-    
-    <view class="menu-list">
-      <view class="menu-item" bindtap="onUserQuery">
-        <view class="menu-icon user-icon"></view>
-        <view class="menu-content">
-          <view class="menu-title">用户查询</view>
-          <view class="menu-desc">查询用户信息和订单</view>
+    <!-- 功能菜单 -->
+    <view class="menu-section">
+      <view class="menu-grid">
+        <view class="menu-item" bindtap="onCustomerService">
+          <view class="menu-icon">💬</view>
+          <text class="menu-text">客服消息</text>
         </view>
-        <view class="menu-arrow">></view>
-      </view>
-      
-      <view class="menu-item" bindtap="onCustomerService">
-        <view class="menu-icon service-icon"></view>
-        <view class="menu-content">
-          <view class="menu-title">客服消息</view>
-          <view class="menu-desc">联系在线客服咨询</view>
+        <view class="menu-item" bindtap="onInvoice">
+          <view class="menu-icon">📄</view>
+          <text class="menu-text">发票开具</text>
         </view>
-        <view class="menu-arrow">></view>
-      </view>
-      
-      <view class="menu-item" bindtap="onInvoice">
-        <view class="menu-icon invoice-icon"></view>
-        <view class="menu-content">
-          <view class="menu-title">发票开具</view>
-          <view class="menu-desc">申请开具电子发票</view>
-        </view>
-        <view class="menu-arrow">></view>
       </view>
     </view>
   </view>

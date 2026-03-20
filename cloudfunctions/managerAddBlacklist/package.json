@@ -1,0 +1,10 @@
+{
+  "name": "managerAddBlacklist",
+  "version": "1.0.0",
+  "description": "添加用户到黑名单",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3",
+    "jsonwebtoken": "^8.5.1"
+  }
+}

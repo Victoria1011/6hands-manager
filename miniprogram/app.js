@@ -11,6 +11,9 @@ App({
       console.error("请使用 2.2.3 或以上的基础库以使用云能力");
     } else {
       try {
+        wx.showLoading({
+          title: '准备中...'
+        })
         // 跨账号环境共享，必须使用 new wx.cloud.Cloud 新建实例
         this.globalData.cloud = new wx.cloud.Cloud({
           // 资源方 AppID
@@ -20,10 +23,12 @@ App({
         });
         console.log('[App] 云开发 ', this.globalData.cloud);
 
+        
         // 初始化云开发实例
         await this.globalData.cloud.init();
 
         console.log('[App] 云开发初始化成功（跨账号环境共享模式）', this.globalData.cloud);
+        wx.hideLoading()
       } catch (err) {
         console.error('[App] 云开发初始化失败:', err);
         wx.showToast({
@@ -37,8 +42,8 @@ App({
   },
 
   // 登录方法
-  async login() {
-    console.log('[App] 开始自动登录流程');
+  async login(username, password) {
+    console.log('[App] 开始登录流程');
 
     if (!this.globalData.cloud) {
       console.error('[App] 云开发未初始化');
@@ -46,25 +51,29 @@ App({
     }
 
     try {
-      // 直接调用云函数
-      console.log('[App] 调用云函数...');
+      const action = username && password ? 'passwordLogin' : 'autoLogin';
+      const data = username && password
+        ? { action, username, password }
+        : { action };
+
+      console.log('[App] 调用云函数，action:', action);
+
       const loginRes = await this.globalData.cloud.callFunction({
         name: 'manager-login',
-        data: {
-          action: 'autoLogin'
-        }
+        data: data
       });
 
       if (loginRes.result.code === 0) {
-        const { token, openid } = loginRes.result.data;
+        const { token, openid, username: usernameRes } = loginRes.result.data;
 
-        console.log('[App] 登录成功，获取 token:', openid);
+        console.log('[App] 登录成功');
 
         // 构建 userInfo 对象
         const userInfo = {
-          userId: openid,
-          role: "zswf",
-          openid: openid
+          userId: openid || usernameRes,
+          role: "admin",
+          openid: openid || usernameRes,
+          username: usernameRes
         };
 
         // 保存 token 和用户信息到全局数据

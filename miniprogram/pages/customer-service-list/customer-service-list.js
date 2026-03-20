@@ -8,7 +8,36 @@ Page({
   },
 
   onLoad() {
+    // 检查登录状态
+    if (!this.checkIsLoggedIn()) return
     this.getMessageList()
+  },
+
+  onShow() {
+    // 每次显示页面时刷新列表，但需要先检查登录状态
+    if (!this.checkIsLoggedIn()) return
+    this.getMessageList()
+  },
+
+  // 检查是否已登录
+  checkIsLoggedIn() {
+    const token = app.getToken()
+    const userInfo = app.getUserInfo()
+
+    if (!token || !userInfo) {
+      wx.showToast({
+        title: '请先登录',
+        icon: 'none'
+      })
+      // 跳转回首页
+      setTimeout(() => {
+        wx.reLaunch({
+          url: '/pages/index/index'
+        })
+      }, 1500)
+      return false
+    }
+    return true
   },
 
   onShow() {

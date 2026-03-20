@@ -160,7 +160,12 @@ exports.main = async (event, context) => {
 
     // 发送客服消息
     console.log('[SendCustomerMessage] 调用微信接口发送消息')
-    const result = await cloud.openapi.customerServiceMessage.send(sendParams)
+    console.log('[SendCustomerMessage] 发送消息参数 0 :', sendParams)
+
+    // 使用云调用 API 发送客服消息，指定来源方 AppID
+    const result = await cloud.openapi({
+      appid: 'wx126d0f048410f694'
+    }).customerServiceMessage.send(sendParams)
 
     console.log('[SendCustomerMessage] 发送结果:', result)
 

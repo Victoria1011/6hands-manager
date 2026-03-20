@@ -1,11 +1,67 @@
 <view class="container">
-  <!-- 消息列表 -->
-  <scroll-view 
-    class="message-scroll" 
-    scroll-y 
-    scroll-into-view="{{scrollToBottom ? 'last-message' : ''}}"
-    scroll-with-animation
-  >
+  <!-- Tab 导航卡片 -->
+  <view class="user-card">
+    <!-- 用户信息展示 -->
+    <view class="user-info">
+      <view class="user-item">
+        <text class="user-label">OpenID：</text>
+        <text class="user-value" selectable>{{userInfo.openid || ''}}</text>
+      </view>
+      <view class="user-item">
+        <text class="user-label">注册时间：</text>
+        <text class="user-value">{{userInfo.registerTime || ''}}</text>
+      </view>
+      <view class="user-item">
+        <text class="user-label">元宝数量：</text>
+        <text class="user-value coins-value">{{userInfo.coins || 0}}</text>
+        <text class="coins-icon">💰</text>
+      </view>
+    </view>
+
+    <!-- Tab 导航 -->
+    <view class="tab-nav">
+      <view
+        class="tab-item {{activeTab === 'chat' ? 'active' : ''}}"
+        bindtap="switchTab"
+        data-tab="chat"
+      >
+        <text class="tab-text">客服消息</text>
+      </view>
+      <view
+        class="tab-item {{activeTab === 'user' ? 'active' : ''}}"
+        bindtap="switchTab"
+        data-tab="user"
+      >
+        <text class="tab-text">用户管理</text>
+      </view>
+      <view
+        class="tab-item {{activeTab === 'logs' ? 'active' : ''}}"
+        bindtap="switchTab"
+        data-tab="logs"
+      >
+        <text class="tab-text">日志查询</text>
+      </view>
+      <view
+        class="tab-item {{activeTab === 'orders' ? 'active' : ''}}"
+        bindtap="switchTab"
+        data-tab="orders"
+      >
+        <text class="tab-text">订单信息</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- Tab 内容区域 -->
+  <view class="tab-content">
+
+    <!-- 客服消息 Tab -->
+    <scroll-view
+      wx:if="{{activeTab === 'chat'}}"
+      class="message-scroll"
+      scroll-y
+      scroll-into-view="{{scrollToBottom ? 'last-message' : ''}}"
+      scroll-with-animation
+    >
     <view wx:if="{{loading}}" class="loading">
       <text>加载中...</text>
     </view>
@@ -59,23 +115,187 @@
     </view>
   </scroll-view>
 
-  <!-- 输入框 -->
-  <view class="input-wrapper">
-    <input 
-      class="input" 
-      placeholder="请输入消息" 
-      value="{{inputContent}}" 
+    <!-- 用户管理 Tab -->
+    <scroll-view
+      wx:if="{{activeTab === 'user'}}"
+      class="tab-scroll"
+      scroll-y
+    >
+      <view class="user-management">
+        <view class="setting-item">
+          <text class="setting-label">黑名单</text>
+          <switch checked="{{userInfo.isBlacklist}}" bindchange="onBlacklistChange" />
+        </view>
+        <view class="setting-reason" wx:if="{{userInfo.isBlacklist}}">
+          <text class="reason-label">黑名单原因</text>
+          <input
+            class="reason-input"
+            placeholder="请输入拉入黑名单的原因"
+            value="{{blacklistReason}}"
+            bindinput="onReasonInput"
+          />
+        </view>
+        <view class="blacklist-info" wx:if="{{userInfo.blacklistReason && !userInfo.isBlacklist}}">
+          <text class="info-label">上次拉黑原因：</text>
+          <text class="info-value">{{userInfo.blacklistReason}}</text>
+        </view>
+        <button class="save-btn" bindtap="saveUserSettings">保存设置</button>
+      </view>
+    </scroll-view>
+
+    <!-- 日志查询 Tab -->
+    <scroll-view
+      wx:if="{{activeTab === 'logs'}}"
+      class="tab-scroll"
+      scroll-y
+    >
+      <view class="logs-container">
+        <view wx:if="{{logsLoading}}" class="loading">
+          <text>加载中...</text>
+        </view>
+        <view wx:elif="{{logs.length === 0 && !logsLoading}}" class="empty">
+          <text class="empty-text">暂无日志</text>
+        </view>
+        <view wx:else class="logs-list">
+          <view wx:for="{{logs}}" wx:key="index" class="log-item">
+            <!-- 日志顶部 -->
+            <view class="log-header">
+              <view class="log-title">
+                <text class="log-type">{{item.formattedType}}</text>
+              </view>
+              <text class="log-time">{{item.formattedTime}}</text>
+            </view>
+
+            <!-- 日志内容 -->
+            <view class="log-body">
+              <view class="log-info-row">
+                <text class="log-label">音色名称</text>
+                <text class="log-value">{{item.voice_name || '-'}}</text>
+              </view>
+              <view class="log-info-row">
+                <text class="log-label">音色ID</text>
+                <text class="log-value log-id">{{item.voice_id || '-'}}</text>
+              </view>
+              <view class="log-info-row">
+                <text class="log-label">音频ID</text>
+                <text class="log-value log-audio-id">{{item.audio_file_id || '-'}}</text>
+              </view>
+            </view>
+
+            <!-- 底部花费 -->
+            <view class="log-footer">
+              <view class="log-cost">
+                <text class="cost-label">花费元宝</text>
+                <text class="cost-value">{{item.cost || 0}} 💰</text>
+              </view>
+            </view>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 订单信息 Tab -->
+    <scroll-view
+      wx:if="{{activeTab === 'orders'}}"
+      class="tab-scroll"
+      scroll-y
+    >
+      <view class="orders-container">
+        <view wx:if="{{ordersLoading}}" class="loading">
+          <text>加载中...</text>
+        </view>
+        <view wx:elif="{{orders.length === 0 && !ordersLoading}}" class="empty">
+          <text class="empty-text">暂无订单</text>
+        </view>
+        <view wx:else class="orders-list">
+          <view wx:for="{{orders}}" wx:key="order_no" class="order-item">
+            <!-- 顶部订单ID和时间 -->
+            <view class="order-top">
+              <text class="order-no-text" selectable bindtap="copyOrderNo" data-order-no="{{item.order_no}}">订单：{{item.order_no}}</text>
+              <text class="order-time">{{item.formattedCreatedTime}}</text>
+            </view>
+
+            <!-- 关键信息 -->
+            <view class="order-header">
+              <view class="order-title">
+                <text class="product-name">{{item.product_name}}</text>
+                <text class="order-amount">¥{{item.amount / 100}}</text>
+              </view>
+              <view class="order-badge status-{{item.status}}">{{item.formattedStatus}}</view>
+            </view>
+
+            <!-- 底部详细信息 -->
+            <view class="order-footer">
+              <view class="footer-item">
+                <text class="footer-label">获得元宝</text>
+                <text class="footer-value coins">{{item.coins}} 💰</text>
+              </view>
+              <view class="footer-item" wx:if="{{item.gift_coins}}">
+                <text class="footer-label">赠送元宝</text>
+                <text class="footer-value">{{item.gift_coins}}</text>
+              </view>
+            </view>
+
+            <!-- 支付时间（如果已支付） -->
+            <view class="order-extra" wx:if="{{item.paid_at}}">
+              <text class="extra-label">支付时间：{{item.formattedPaidTime}}</text>
+            </view>
+
+            <!-- 失败原因（如果失败） -->
+            <view class="order-fail" wx:if="{{item.fail_reason}}">
+              <text class="fail-label">失败原因：{{item.fail_reason}}</text>
+            </view>
+
+            <!-- 退款时间（如果已退款） -->
+            <view class="order-extra" wx:if="{{item.refunded_at}}">
+              <text class="extra-label">退款时间：{{item.formattedRefundedTime}}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+
+  <!-- 输入框（仅在客服消息tab显示） -->
+  <view wx:if="{{activeTab === 'chat'}}" class="input-wrapper">
+    <input
+      class="input"
+      placeholder="请输入消息"
+      value="{{inputContent}}"
       bindinput="onInput"
       confirm-type="send"
       bindconfirm="sendMessage"
     />
-    <button 
-      class="send-btn {{inputContent.trim() ? 'active' : ''}}" 
-      size="mini" 
+    <button class="icon-btn" bindtap="toggleActionSheet" plain>
+      <text class="plus-icon">+</text>
+    </button>
+    <button
+      class="send-btn {{inputContent ? 'active' : ''}}"
+      size="mini"
       bindtap="sendMessage"
-      disabled="{{!inputContent.trim()}}"
+      disabled="{{!inputContent}}"
     >
       发送
     </button>
+  </view>
+
+  <!-- 快捷功能菜单 -->
+  <view wx:if="{{showActionSheet}}" class="action-sheet" bindtap="toggleActionSheet">
+    <view class="action-sheet-content" catchtap="stopPropagation">
+      <view class="action-sheet-header">
+        <text class="action-sheet-title">选择功能</text>
+        <text class="action-sheet-close" bindtap="toggleActionSheet">×</text>
+      </view>
+      <view class="action-grid">
+        <view class="action-item" bindtap="chooseImage">
+          <view class="action-icon">🖼️</view>
+          <text class="action-text">图片</text>
+        </view>
+        <view class="action-item" bindtap="takePhoto">
+          <view class="action-icon">📷</view>
+          <text class="action-text">拍照</text>
+        </view>
+      </view>
+    </view>
   </view>
 </view>

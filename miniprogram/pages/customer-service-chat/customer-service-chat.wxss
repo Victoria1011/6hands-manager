@@ -126,11 +126,13 @@
   position: relative;
   z-index: 1;
   width: 100%;
+  min-height: 0;
 }
 
 .tab-scroll {
   width: 100%;
   height: 100%;
+  box-sizing: border-box;
 }
 
 .message-scroll {
@@ -139,6 +141,8 @@
   padding: 20rpx;
   position: relative;
   z-index: 1;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .message-item {

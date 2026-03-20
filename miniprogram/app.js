@@ -28,22 +28,33 @@ App({
         await this.globalData.cloud.init();
 
         console.log('[App] 云开发初始化成功（跨账号环境共享模式）', this.globalData.cloud);
+        
+        // 云开发初始化成功后，自动登录
+        console.log('[App] 开始自动登录');
+        const loginResult = await this.login();
+        
+        if (loginResult.success) {
+          console.log('[App] 自动登录成功');
+        } else {
+          console.error('[App] 自动登录失败:', loginResult.message);
+        }
+        
         wx.hideLoading()
       } catch (err) {
         console.error('[App] 云开发初始化失败:', err);
+        wx.hideLoading()
         wx.showToast({
           title: '云开发初始化失败',
           icon: 'none'
         });
       }
     }
-
-    // 小程序启动时不自动登录，由首页负责登录
   },
 
   // 登录方法
   async login(username, password) {
-    console.log('[App] 开始登录流程');
+    console.log('[App] ===== 开始登录流程 =====');
+    console.log('[App] 是否使用密码登录:', !!username && !!password);
 
     if (!this.globalData.cloud) {
       console.error('[App] 云开发未初始化');
@@ -56,17 +67,23 @@ App({
         ? { action, username, password }
         : { action };
 
-      console.log('[App] 调用云函数，action:', action);
+      console.log('[App] 调用云函数 manager-login，action:', action);
+      console.log('[App] 请求数据:', JSON.stringify(data));
 
       const loginRes = await this.globalData.cloud.callFunction({
         name: 'manager-login',
         data: data
       });
 
+      console.log('[App] 云函数返回结果:', JSON.stringify(loginRes.result));
+
       if (loginRes.result.code === 0) {
         const { token, openid, username: usernameRes } = loginRes.result.data;
 
         console.log('[App] 登录成功');
+        console.log('[App] Token 长度:', token.length);
+        console.log('[App] 用户 openid:', openid);
+        console.log('[App] 用户名:', usernameRes);
 
         // 构建 userInfo 对象
         const userInfo = {
@@ -84,10 +101,10 @@ App({
         wx.setStorageSync('token', token);
         wx.setStorageSync('userInfo', userInfo);
 
-        console.log('[App] Token 已保存');
+        console.log('[App] Token 已保存到本地存储');
         return { success: true, userInfo };
       } else {
-        console.error('[App] 登录失败:', loginRes.result.message);
+        console.error('[App] 登录失败，错误码:', loginRes.result.code, '错误信息:', loginRes.result.message);
         return { success: false, message: loginRes.result.message };
       }
     } catch (err) {

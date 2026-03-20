@@ -13,13 +13,16 @@ cloud.init({
  * @param {string} password - 密码（密码登录时需要）
  */
 exports.main = async (event, context) => {
+  
   const { action, username, password } = event;
+  console.log('[ManagerLogin] action:', action);
 
   if (action === "autoLogin") {
     return handleAutoLogin(event);
   } else if (action === "passwordLogin") {
     return handlePasswordLogin(event, username, password);
   } else {
+    console.error('[ManagerLogin] 无效的操作类型:', action);
     return {
       code: 400,
       message: "无效的操作类型",
@@ -31,12 +34,17 @@ exports.main = async (event, context) => {
  * 处理自动登录逻辑
  */
 async function handleAutoLogin(event) {
+  console.log('[AutoLogin] ===== 开始自动登录 =====');
+  
   try {
     // 获取微信 openid
     const wxContext = cloud.getWXContext();
+    console.log('[AutoLogin] 获取 wxContext');
+    console.log('[AutoLogin] wxContext.FROM_OPENID:', wxContext.FROM_OPENID);
+    console.log('[AutoLogin] wxContext.OPENID:', wxContext.OPENID);
+    console.log('[AutoLogin] wxContext.APPID:', wxContext.APPID);
+    
     const openid = wxContext.FROM_OPENID;
-
-    console.log('[AutoLogin] wxContext:', wxContext);
 
     if (!openid) {
       console.error('[AutoLogin] OPENID 为空');
@@ -46,6 +54,8 @@ async function handleAutoLogin(event) {
       };
     }
 
+    console.log('[AutoLogin] OpenID 获取成功:', openid);
+
     // 生成 token
     const token = generateToken({
       userId: openid,
@@ -54,6 +64,7 @@ async function handleAutoLogin(event) {
     });
 
     console.log('[AutoLogin] 登录成功，token 已生成');
+    console.log('[AutoLogin] Token 长度:', token.length);
 
     return {
       code: 0,
@@ -64,7 +75,8 @@ async function handleAutoLogin(event) {
       },
     };
   } catch (error) {
-    console.error("自动登录失败:", error);
+    console.error('[AutoLogin] 自动登录失败:', error);
+    console.error('[AutoLogin] 错误堆栈:', error.stack);
     return {
       code: 500,
       message: "自动登录失败",

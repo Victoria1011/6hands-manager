@@ -44,6 +44,7 @@ function getUserFromToken(event) {
 
   const payload = verifyToken(token)
   if (!payload) {
+    console.error('[Auth] Token 验证失败')
     return null
   }
 

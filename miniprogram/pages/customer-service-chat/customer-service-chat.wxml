@@ -84,8 +84,8 @@
       ></image>
       
       <view class="message-content">
-        <text class="time">{{formatTime(message.created_at)}}</text>
-        
+        <text class="time">{{message.formattedTime}}</text>
+
         <!-- 文本消息 -->
         <view wx:if="{{message.msg_type === 'text'}}" class="text-message">
           <text>{{message.content}}</text>

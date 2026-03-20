@@ -52,8 +52,12 @@ Page({
     try {
       // 获取 token
       const token = app.getToken()
+      console.log('[CustomerServiceList] ===== 开始获取客服消息列表 =====')
+      console.log('[CustomerServiceList] Token:', token ? '存在' : '不存在')
+      console.log('[CustomerServiceList] Token 长度:', token ? token.length : 0)
 
       if (!app.globalData.cloud) {
+        console.error('[CustomerServiceList] 云开发未初始化')
         wx.showToast({
           title: '云开发未初始化',
           icon: 'none'
@@ -61,6 +65,7 @@ Page({
         return
       }
 
+      console.log('[CustomerServiceList] 调用云函数 getCustomerServiceList')
       const res = await app.globalData.cloud.callFunction({
         name: 'getCustomerServiceList',
         data: {
@@ -68,18 +73,22 @@ Page({
         }
       })
 
+      console.log('[CustomerServiceList] 云函数返回结果:', JSON.stringify(res.result))
+
       if (res.result.code === 0) {
+        console.log('[CustomerServiceList] 获取成功，消息数量:', res.result.data?.length || 0)
         this.setData({
           messageList: res.result.data || []
         })
       } else {
+        console.error('[CustomerServiceList] 云函数返回错误:', res.result.code, res.result.message)
         wx.showToast({
           title: res.result.message || '获取失败',
           icon: 'none'
         })
       }
     } catch (err) {
-      console.error('获取客服消息列表失败:', err)
+      console.error('[CustomerServiceList] 获取客服消息列表异常:', err)
       wx.showToast({
         title: '获取失败',
         icon: 'none'

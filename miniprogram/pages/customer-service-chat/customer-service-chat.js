@@ -102,8 +102,21 @@ Page({
       })
 
       if (res.result.code === 0) {
+        const messages = res.result.data.messages || []
+        console.log('[CustomerServiceChat] 获取消息成功，消息数量:', messages.length)
+        // 打印每条消息的 type 字段并格式化时间
+        messages.forEach((msg, index) => {
+          console.log(`[CustomerServiceChat] 消息 ${index + 1}:`, {
+            type: msg.type,
+            msg_type: msg.msg_type,
+            content: msg.content ? msg.content.substring(0, 50) : '',
+            created_at: msg.created_at
+          })
+          // 添加格式化后的时间字段
+          msg.formattedTime = this.formatTime(msg.created_at)
+        })
         this.setData({
-          messages: res.result.data.messages || [],
+          messages: messages,
           scrollToBottom: true
         })
       } else {
@@ -137,12 +150,14 @@ Page({
       return
     }
 
+    const now = new Date().toISOString()
     // 先在界面上显示发送中的消息
     const tempMessage = {
       type: 'customer_to_user',
       msg_type: 'text',
       content: content,
-      created_at: new Date().toISOString(),
+      created_at: now,
+      formattedTime: this.formatTime(now),
       sending: true
     }
 
@@ -175,30 +190,36 @@ Page({
       })
 
       if (res.result.code === 0 && res.result.data.success) {
-        // 发送成功，移除发送中的临时消息
-        const messages = this.data.messages.filter(msg => !msg.sending)
+        // 发送成功，更新临时消息状态为已发送
+        const messages = this.data.messages.map(msg => {
+          if (msg.sending && msg.content === content) {
+            return { ...msg, sending: false }
+          }
+          return msg
+        })
 
-        // 重新获取最新消息列表
+        this.setData({ messages })
+
+        // 重新获取最新消息列表以同步服务器状态
         await this.getMessages()
       } else {
-        // 发送失败
+        // 发送失败，移除临时消息
+        const messages = this.data.messages.filter(msg => !msg.sending)
+        this.setData({ messages })
         wx.showToast({
           title: res.result.message || '发送失败',
           icon: 'none'
         })
-        // 移除发送中的临时消息
-        const messages = this.data.messages.filter(msg => !msg.sending)
-        this.setData({ messages })
       }
     } catch (err) {
       console.error('发送消息失败:', err)
+      // 移除发送中的临时消息
+      const messages = this.data.messages.filter(msg => !msg.sending)
+      this.setData({ messages })
       wx.showToast({
         title: '发送失败',
         icon: 'none'
       })
-      // 移除发送中的临时消息
-      const messages = this.data.messages.filter(msg => !msg.sending)
-      this.setData({ messages })
     }
   },
 
@@ -273,12 +294,14 @@ Page({
     })
 
     try {
+      const now = new Date().toISOString()
       // 先在界面上显示发送中的消息
       const tempMessage = {
         type: 'customer_to_user',
         msg_type: 'image',
         image_url: filePath,
-        created_at: new Date().toISOString(),
+        created_at: now,
+        formattedTime: this.formatTime(now),
         sending: true
       }
 
@@ -317,31 +340,39 @@ Page({
       })
 
       if (res.result.code === 0 && res.result.data.success) {
-        // 发送成功
-        wx.hideLoading()
-        const messages = this.data.messages.filter(msg => !msg.sending)
+        // 发送成功，更新临时消息状态为已发送
+        const messages = this.data.messages.map(msg => {
+          if (msg.sending && msg.image_url === filePath) {
+            return { ...msg, sending: false }
+          }
+          return msg
+        })
 
-        // 重新获取最新消息列表
+        this.setData({ messages })
+        wx.hideLoading()
+
+        // 重新获取最新消息列表以同步服务器状态
         await this.getMessages()
       } else {
-        // 发送失败
+        // 发送失败，移除临时消息
+        const messages = this.data.messages.filter(msg => !msg.sending)
+        this.setData({ messages })
         wx.hideLoading()
         wx.showToast({
           title: res.result.message || '发送失败',
           icon: 'none'
         })
-        const messages = this.data.messages.filter(msg => !msg.sending)
-        this.setData({ messages })
       }
     } catch (err) {
       console.error('发送图片失败:', err)
+      // 移除发送中的临时消息
+      const messages = this.data.messages.filter(msg => !msg.sending)
+      this.setData({ messages })
       wx.hideLoading()
       wx.showToast({
         title: '发送失败',
         icon: 'none'
       })
-      const messages = this.data.messages.filter(msg => !msg.sending)
-      this.setData({ messages })
     }
   },
 

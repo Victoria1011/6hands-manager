@@ -249,29 +249,77 @@ Page({
     }
   },
 
-  // 拍照
-  async takePhoto() {
+  // 发送购买元宝消息
+  async sendPurchaseCoins() {
     this.setData({ showActionSheet: false })
 
+    const content = `点击下方套餐购买元宝：
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=1">入门套餐 ¥1 (1万元宝)</a>
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=2">标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 15 万元宝)</a>`
+
+    const now = new Date().toISOString()
+    const tempMessage = {
+      type: 'customer_to_user',
+      msg_type: 'text',
+      content: content,
+      created_at: now,
+      formattedTime: this.formatTime(now),
+      sending: true
+    }
+
+    this.setData({
+      messages: [...this.data.messages, tempMessage],
+      scrollToBottom: true
+    })
+
     try {
-      const res = await wx.chooseImage({
-        count: 1,
-        sizeType: ['compressed'],
-        sourceType: ['camera']
+      const token = app.getToken()
+
+      if (!app.globalData.cloud) {
+        wx.showToast({
+          title: '云开发未初始化',
+          icon: 'none'
+        })
+        return
+      }
+
+      const res = await app.globalData.cloud.callFunction({
+        name: 'sendCustomerMessage',
+        data: {
+          openid: this.data.openid,
+          msgtype: 'text',
+          content: content,
+          token: token
+        }
       })
 
-      if (res.tempFilePaths.length > 0) {
-        const tempFilePath = res.tempFilePaths[0]
-        await this.sendImageMessage(tempFilePath)
-      }
-    } catch (err) {
-      console.error('拍照失败:', err)
-      if (err.errMsg && !err.errMsg.includes('cancel')) {
+      if (res.result.code === 0 && res.result.data.success) {
+        const messages = this.data.messages.map(msg => {
+          if (msg.sending && msg.content === content) {
+            return { ...msg, sending: false }
+          }
+          return msg
+        })
+
+        this.setData({ messages })
+        await this.getMessages()
+      } else {
+        const messages = this.data.messages.filter(msg => !msg.sending)
+        this.setData({ messages })
         wx.showToast({
-          title: '拍照失败',
+          title: res.result.message || '发送失败',
           icon: 'none'
         })
       }
+    } catch (err) {
+      console.error('发送购买元宝失败:', err)
+      const messages = this.data.messages.filter(msg => !msg.sending)
+      this.setData({ messages })
+      wx.showToast({
+        title: '发送失败',
+        icon: 'none'
+      })
     }
   },
 

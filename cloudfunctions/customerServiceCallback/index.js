@@ -23,32 +23,7 @@ exports.main = async (event, context) => {
     MsgType          // 消息类型
   } = event
 
-  console.log('[CustomerServiceCallback] ===== 消息详情 =====')
-  console.log('[CustomerServiceCallback] FromUserName (发送者):', FromUserName)
-  console.log('[CustomerServiceCallback] ToUserName (接收者):', ToUserName)
-  console.log('[CustomerServiceCallback] Content (消息内容):', Content)
-  console.log('[CustomerServiceCallback] CreateTime (创建时间):', CreateTime)
-  console.log('[CustomerServiceCallback] MsgId (消息ID):', MsgId)
-  console.log('[CustomerServiceCallback] MsgType (消息类型):', MsgType)
-
-  // 如果是图片消息，打印图片信息
-  if (MsgType === 'image') {
-    const { PicUrl, MediaId } = event
-    console.log('[CustomerServiceCallback] ===== 图片消息 =====')
-    console.log('[CustomerServiceCallback] PicUrl (图片URL):', PicUrl)
-    console.log('[CustomerServiceCallback] MediaId (媒体ID):', MediaId)
-  }
-
-  // 如果是小程序卡片消息，打印卡片信息
-  if (MsgType === 'miniprogramapp') {
-    const { Title, AppId, PagePath, ThumbMediaId, ThumbUrl } = event
-    console.log('[CustomerServiceCallback] ===== 小程序卡片消息 =====')
-    console.log('[CustomerServiceCallback] Title (标题):', Title)
-    console.log('[CustomerServiceCallback] AppId (小程序AppId):', AppId)
-    console.log('[CustomerServiceCallback] PagePath (页面路径):', PagePath)
-    console.log('[CustomerServiceCallback] ThumbMediaId (缩略图媒体ID):', ThumbMediaId)
-    console.log('[CustomerServiceCallback] ThumbUrl (缩略图URL):', ThumbUrl)
-  }
+  console.log('[CustomerServiceCallback] ===== 消息详情 =====', event)
 
   try {
     let messageData = {}
@@ -72,7 +47,7 @@ exports.main = async (event, context) => {
         created_at: new Date().toISOString()
       }
 
-    } else if (MsgType === 'miniprogramapp') {
+    } else if (MsgType === 'miniprogrampage' || MsgType === 1) {
       // 小程序卡片消息
       const { Title, AppId, PagePath, ThumbMediaId, ThumbUrl } = event
       console.log('[CustomerServiceCallback] 处理小程序卡片消息')
@@ -90,6 +65,74 @@ exports.main = async (event, context) => {
         msg_type: 'miniprogramapp',
         raw_event: event,
         created_at: new Date().toISOString()
+      }
+
+      // 发送支付链接卡片回复（文本消息）
+      try {
+        console.log('[CustomerServiceCallback] 发送支付链接')
+        console.log('[CustomerServiceCallback] PagePath:', PagePath)
+
+        // 根据 PagePath 结尾判断是哪个套餐
+        let sendContent = ''
+        if (PagePath && PagePath.endsWith('product1')) {
+          sendContent = `购买入门套餐：
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=1">点我购买: 
+入门套餐 ¥1 (1万元宝)</a>`
+        } else if (PagePath && PagePath.endsWith('product2')) {
+          sendContent = `购买标准套餐：
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=2">点我购买:
+标准套餐 ¥10 (10万元宝 + 赠送1万元宝)</a>`
+        } else if (PagePath && PagePath.endsWith('product3')) {
+          sendContent = `购买畅享套餐：
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">点我购买:
+畅享套餐 ¥100 (100万元宝 + 赠送15万元宝)</a>`
+        } else {
+          // 默认显示所有套餐
+          sendContent = `点击下方套餐购买元宝：
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=1">入门套餐 ¥1 (1万元宝)</a>
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=2">标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 15 万元宝)</a>`
+        }
+
+        console.log('[CustomerServiceCallback] sendContent:', sendContent)
+
+        const payResult = await cloud.openapi({
+          appid: 'wx126d0f048410f694'
+        }).customerServiceMessage.send({
+          touser: FromUserName,
+          msgtype: 'text',
+          "text":
+          {
+            "content": sendContent
+          }
+        })
+        console.log('[CustomerServiceCallback] 支付链接发送结果:', payResult)
+
+        // 保存支付链接消息记录
+        const payMessageRecord = {
+          type: 'customer_to_user',
+          msg_type: 'text',
+          content: '点击前往支付',
+          send_result: {
+            errcode: payResult.errcode,
+            errmsg: payResult.errmsg
+          },
+          success: payResult.errcode === 0,
+          created_at: new Date().toISOString()
+        }
+
+        // 更新数据库，添加支付链接消息
+        await db.collection('customer_service_messages').where({
+          openid: FromUserName
+        }).update({
+          data: {
+            messages: db.command.push(payMessageRecord),
+            updated_at: new Date().toISOString()
+          }
+        })
+        console.log('[CustomerServiceCallback] 支付链接消息已保存')
+      } catch (err) {
+        console.error('[CustomerServiceCallback] 发送支付链接失败:', err)
       }
 
     } else {

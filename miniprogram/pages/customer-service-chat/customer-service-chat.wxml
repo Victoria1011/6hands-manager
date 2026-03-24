@@ -291,9 +291,9 @@
           <view class="action-icon">🖼️</view>
           <text class="action-text">图片</text>
         </view>
-        <view class="action-item" bindtap="takePhoto">
-          <view class="action-icon">📷</view>
-          <text class="action-text">拍照</text>
+        <view class="action-item" bindtap="sendPurchaseCoins">
+          <view class="action-icon">💰</view>
+          <text class="action-text">购买元宝</text>
         </view>
       </view>
     </view>

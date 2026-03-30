@@ -1,0 +1,10 @@
+{
+  "name": "managerVoiceManage",
+  "version": "1.0.0",
+  "description": "音色管理 - 查询音色列表、删除音色",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3",
+    "jsonwebtoken": "^8.5.1"
+  }
+}

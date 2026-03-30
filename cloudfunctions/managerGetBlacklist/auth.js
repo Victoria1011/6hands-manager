@@ -2,7 +2,7 @@
 const jwt = require('jsonwebtoken')
 
 // JWT 密钥 - 从环境变量读取，生产环境建议在云开发控制台配置
-const JWT_SECRET = process.env.JWT_SECRET || 'six-hands-jwt-secret-key-change-in-production'
+const JWT_SECRET = process.env.JWT_SECRET
 
 /**
  * 生成 JWT Token

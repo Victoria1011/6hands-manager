@@ -16,7 +16,7 @@ exports.main = async (event, context) => {
   const wxContext = cloud.getWXContext()
   console.log('[ManagerProcessRefund] wxContext:', wxContext)
 
-  const { refundId, status, rejectReason, token, openid } = event
+  const { refundId, status, rejectReason, token, openid, coins } = event
 
   try {
     // 验证 token
@@ -68,8 +68,6 @@ exports.main = async (event, context) => {
     // 如果状态改为 approved，需要处理 coins 数据库
     if (status === 'approved') {
       console.log('[ManagerProcessRefund] 状态改为 approved，开始处理 coins 数据库')
-
-      const { openid, coins } = refundRecord
 
       if (!openid) {
         console.log('[ManagerProcessRefund] 退款记录中没有 openid')
@@ -128,7 +126,27 @@ exports.main = async (event, context) => {
     await db.collection('refund_list').doc(refundId).update({
       data: updateData
     })
-
+    // 6. 更新用户状态为退款审核中
+    await db.collection('users').where({
+      openid: openid
+    }).update({
+      data: {
+        refund_status: 'approved',
+        refund_id: refundId,
+        updated_at: new Date().toISOString()
+      }
+    })
+    await db.collection('recharge_orders').where({
+      _id: doc._id
+    }).update({
+      data: {
+        orders: ordersNeedUpdate.map(order => ({
+          ...order,
+          refund_status: 'approved', // 标记为审核中
+          refund_id: refundId // 记录退款申请ID
+        }))
+      }
+    })
     console.log('[ManagerProcessRefund] 更新成功')
 
     return {

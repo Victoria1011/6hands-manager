@@ -41,6 +41,13 @@ Page({
     });
   },
 
+  // 退款处理
+  onRefund() {
+    wx.navigateTo({
+      url: '/pages/refund-list/refund-list'
+    });
+  },
+
   // 发票开具
   onInvoice() {
     wx.showToast({

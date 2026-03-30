@@ -33,6 +33,10 @@
           <view class="menu-icon">💬</view>
           <text class="menu-text">客服消息</text>
         </view>
+        <view class="menu-item" bindtap="onRefund">
+          <view class="menu-icon">💰</view>
+          <text class="menu-text">退款处理</text>
+        </view>
         <view class="menu-item" bindtap="onInvoice">
           <view class="menu-icon">📄</view>
           <text class="menu-text">发票开具</text>

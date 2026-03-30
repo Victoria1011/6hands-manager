@@ -1,0 +1,240 @@
+<wxs module="format">
+  module.exports = {
+    toFixed: function(num) {
+      if (typeof num !== 'number') return num
+      return num.toFixed(2)
+    }
+  }
+</wxs>
+
+<view class="container">
+
+  <!-- Tab 导航 -->
+  <view class="tab-nav">
+    <view
+      class="tab-item {{activeTab === 'reviewing' ? 'active' : ''}}"
+      bindtap="switchTab"
+      data-tab="reviewing"
+    >
+      <text class="tab-text">待处理</text>
+      <text wx:if="{{reviewingCount > 0}}" class="tab-badge">{{reviewingCount}}</text>
+    </view>
+    <view
+      class="tab-item {{activeTab === 'rejected' ? 'active' : ''}}"
+      bindtap="switchTab"
+      data-tab="rejected"
+    >
+      <text class="tab-text">已驳回</text>
+    </view>
+    <view
+      class="tab-item {{activeTab === 'completed' ? 'active' : ''}}"
+      bindtap="switchTab"
+      data-tab="completed"
+    >
+      <text class="tab-text">已完成</text>
+    </view>
+    <view
+      class="tab-item {{activeTab === 'cancelled' ? 'active' : ''}}"
+      bindtap="switchTab"
+      data-tab="cancelled"
+    >
+      <text class="tab-text">已取消</text>
+    </view>
+  </view>
+
+  <!-- 列表内容 -->
+  <scroll-view class="list-scroll" scroll-y scroll-top="{{scrollTop}}">
+    <view wx:if="{{loading}}" class="loading">
+      <text>加载中...</text>
+    </view>
+
+    <view wx:elif="{{currentList.length === 0 && !loading}}" class="empty">
+      <text class="empty-text">暂无{{activeTab === 'reviewing' ? '待处理' : activeTab === 'rejected' ? '已驳回' : activeTab === 'completed' ? '已完成' : '已取消'}}申请</text>
+    </view>
+
+    <view wx:else class="refund-list">
+      <view
+        wx:for="{{currentList}}"
+        wx:key="id"
+        wx:for-item="refund"
+        class="refund-item"
+        bindtap="viewDetail"
+        data-refund="{{refund}}"
+      >
+        <!-- 顶部信息 -->
+        <view class="refund-header">
+          <view class="refund-title">
+            <text class="openid-text" selectable>{{refund.openid}}</text>
+          </view>
+          <view class="refund-time">{{refund.formattedTime}}</view>
+        </view>
+
+        <!-- 申请信息 -->
+        <view class="refund-body">
+          <view class="refund-info-row">
+            <text class="info-label">退款金额</text>
+            <text class="info-value amount">¥{{refund.refund_info.refundable_amount}}</text>
+            <text class="info-label">退款元宝</text>
+            <text class="info-value amount">{{refund.refund_info.refundable_coins}}</text>
+          </view>
+          <!-- 订单详情 -->
+          <view wx:if="{{refund.orders && refund.orders.length > 0}}" class="order-detail-card">
+            <view class="order-detail-title">
+              <text class="detail-title-icon">📦</text>
+              <text class="detail-title-text">订单详情</text>
+            </view>
+            <view wx:for="{{refund.orders}}" wx:key="order_no" wx:for-item="order" class="order-detail-item">
+              <!-- 商品名称和时间行 -->
+              <view class="order-header-row">
+                <text class="order-product-name">{{order.product_name}}</text>
+                <text class="order-time-right">{{order.formattedTime}}</text>
+              </view>
+              <!-- 信息行：横向排列 -->
+              <view class="order-info-grid">
+                <view class="order-info-item">
+                  <text class="info-key">金额</text>
+                  <text class="info-val amount">¥{{order.amount}}</text>
+                </view>
+                <view class="order-info-item">
+                  <text class="info-key">元宝</text>
+                  <text class="info-val coins">{{order.coins}}</text>
+                </view>
+                <view wx:if="{{order.gift_coins}}" class="order-info-item">
+                  <text class="info-key">赠送</text>
+                  <text class="info-val gift">{{order.gift_coins}}</text>
+                </view>
+                <view class="order-info-item">
+                  <text class="info-key">状态</text>
+                  <text class="info-val order-status-{{order.status}}">{{order.status === 'paid' ? '已支付' : order.status}}</text>
+                </view>
+              </view>
+              <!-- 订单间分割线 -->
+              <view wx:if="{{index < refund.orders.length - 1}}" class="order-divider"></view>
+            </view>
+          </view>
+
+          <view wx:if="{{refund.reason}}" class="refund-info-row">
+            <text class="info-label">退款原因</text>
+            <text class="info-value reason">{{refund.reason}}</text>
+          </view>
+          <view wx:if="{{activeTab === 'rejected' && refund.reject_reason}}" class="refund-info-row">
+            <text class="info-label">驳回原因</text>
+            <text class="info-value reject-reason">{{refund.reject_reason}}</text>
+          </view>
+        </view>
+
+        <!-- 底部操作按钮（仅待处理-审核中状态） -->
+        <view wx:if="{{refund.status === 'reviewing'}}" class="refund-actions">
+          <button
+            class="action-btn reject-btn"
+            size="mini"
+            bindtap="rejectRefund"
+            data-refund="{{refund}}"
+          >
+            驳回
+          </button>
+          <button
+            class="action-btn approve-btn"
+            size="mini"
+            bindtap="approveRefund"
+            data-refund="{{refund}}"
+          >
+            同意
+          </button>
+        </view>
+
+        <!-- 状态标签或退款按钮 -->
+        <view wx:else class="refund-status status-{{refund.status}}">
+          <text>{{refund.formattedStatus}}</text>
+        </view>
+        <!-- 退款按钮（仅 approved 状态） -->
+        <view wx:if="{{refund.status === 'approved'}}" class="refund-actions">
+          <button
+            class="action-btn refund-btn"
+            size="mini"
+            bindtap="openRefundDialog"
+            data-refund="{{refund}}"
+          >
+            退款
+          </button>
+        </view>
+      </view>
+    </view>
+  </scroll-view>
+</view>
+
+<!-- 驳回弹窗 -->
+<view wx:if="{{showRejectDialog}}" class="dialog-overlay" bindtap="closeRejectDialog">
+  <view class="dialog-content" catchtap="stopPropagation">
+    <view class="dialog-header">
+      <text class="dialog-title">驳回退款</text>
+      <text class="dialog-close" bindtap="closeRejectDialog">×</text>
+    </view>
+    <view class="dialog-body">
+      <textarea
+        class="dialog-input"
+        placeholder="请输入驳回原因..."
+        value="{{rejectReason}}"
+        bindinput="onRejectReasonInput"
+        maxlength="200"
+      ></textarea>
+    </view>
+    <view class="dialog-footer">
+      <button class="dialog-btn cancel-btn" bindtap="closeRejectDialog">取消</button>
+      <button class="dialog-btn confirm-btn" bindtap="confirmReject">确认驳回</button>
+    </view>
+  </view>
+</view>
+
+<!-- 退款弹窗 -->
+<view wx:if="{{showRefundDialog}}" class="dialog-overlay" bindtap="closeRefundDialog">
+  <view class="dialog-content refund-dialog-content" catchtap="stopPropagation">
+    <view class="dialog-header">
+      <text class="dialog-title">退款处理</text>
+      <text class="dialog-close" bindtap="closeRefundDialog">×</text>
+    </view>
+    <view class="dialog-body">
+      <view class="refund-info-section">
+        <view class="refund-amount-row">
+          <text class="refund-amount-label">退款金额</text>
+          <input
+            class="refund-amount-input"
+            type="digit"
+            value="{{refundAmount}}"
+            bindinput="onRefundAmountInput"
+            placeholder="请输入退款金额"
+          />
+          <text class="refund-amount-unit">元</text>
+        </view>
+      </view>
+
+      <!-- 退款订单列表 -->
+      <view wx:if="{{refundOrders.length > 0}}" class="refund-orders-section">
+        <view class="refund-orders-title">
+          <text class="orders-title-icon">📋</text>
+          <text class="orders-title-text">退款来源订单</text>
+        </view>
+        <view class="refund-orders-list">
+          <view wx:for="{{refundOrders}}" wx:key="order_no" wx:for-item="order" class="refund-order-item">
+            <view class="refund-order-header">
+              <text class="refund-order-name">{{order.product_name}}</text>
+              <text class="refund-order-amount">¥{{format.toFixed(order.refund_amount)}}</text>
+            </view>
+            <view class="refund-order-details">
+              <text class="refund-order-detail">订单金额：¥{{order.amount}}</text>
+              <text class="refund-order-detail">退款比例：{{order.refund_percent}}%</text>
+            </view>
+          </view>
+        </view>
+        <view class="refund-total-info">
+          <text class="refund-total-label">总计退款</text>
+          <text class="refund-total-value">¥{{totalRefundAmount}}</text>
+        </view>
+      </view>
+    </view>
+    <view class="dialog-footer">
+      <button class="dialog-btn cancel-btn" bindtap="closeRefundDialog">取消</button>
+      <button class="dialog-btn confirm-btn" bindtap="confirmRefund">确认退款</button>
+    </view>
+  </view>
+</view>

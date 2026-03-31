@@ -1,0 +1,117 @@
+<view class="container">
+  <!-- 头部 -->
+  <view class="header">
+
+    <view class="header-actions">
+      <view class="voice-type-tabs">
+        <view
+          class="type-tab {{currentType === 'clone' ? 'type-tab-active' : ''}}"
+          bindtap="switchType"
+          data-type="clone"
+        >
+          声音克隆
+        </view>
+        <view
+          class="type-tab {{currentType === 'design' ? 'type-tab-active' : ''}}"
+          bindtap="switchType"
+          data-type="design"
+        >
+          声音设计
+        </view>
+      </view>
+      <view class="header-buttons">
+        <button class="batch-mode-btn {{batchMode ? 'batch-mode-active' : ''}}" bindtap="toggleBatchMode" wx:if="{{!loading}}">
+          {{batchMode ? '取消' : '选择'}}
+        </button>
+        <button class="refresh-btn" bindtap="onRefresh" loading="{{loading}}" wx:if="{{!batchMode}}">
+          <text wx:if="{{!loading}}">刷新</text>
+          <text wx:else>加载中...</text>
+        </button>
+      </view>
+    </view>
+
+    <!-- 批量操作工具栏 -->
+    <view class="batch-toolbar" wx:if="{{batchMode}}">
+      <view class="batch-select-all" bindtap="toggleSelectAll">
+        <text class="select-all-text">{{selectedCount > 0 ? '取消选择' : '全选'}}</text>
+      </view>
+      <text class="batch-count">已选择: {{selectedCount}}</text>
+      <button class="batch-delete-btn" bindtap="onBatchDelete" disabled="{{selectedCount === 0}}">
+        删除 ({{selectedCount}})
+      </button>
+    </view>
+  </view>
+
+  <!-- 统计信息 -->
+  <view class="stats-card">
+    <view class="stat-item">
+      <text class="stat-value">{{voiceList.length}}</text>
+      <text class="stat-label">{{currentType === 'clone' ? '声音克隆' : '声音设计'}}总数</text>
+    </view>
+    <view class="stat-divider"></view>
+    <view class="stat-item">
+      <text class="stat-value">{{savedVoiceCount}}</text>
+      <text class="stat-label">已保存数</text>
+    </view>
+  </view>
+
+  <!-- 音色列表 -->
+  <view class="voice-list" wx:if="{{voiceList.length > 0}}">
+    <view class="voice-card {{item.user_info && item.user_info.type === 'saved' ? 'voice-card-saved' : ''}} {{batchMode ? 'voice-card-batch' : ''}}" wx:for="{{voiceList}}" wx:key="voice" data-voice="{{item.voice}}" bindtap="onSelectVoice" wx:if="{{!batchMode || (!item.user_info || item.user_info.type !== 'saved')}}">
+      <view class="voice-header">
+        <view class="voice-info">
+          <!-- 批量模式复选框 -->
+          <view class="voice-checkbox" wx:if="{{batchMode && (!item.user_info || item.user_info.type !== 'saved')}}">
+            <view class="checkbox {{selectedVoices[item.voice] ? 'checkbox-checked' : ''}}">
+              <text class="check-icon" wx:if="{{selectedVoices[item.voice]}}">✓</text>
+            </view>
+          </view>
+          <view class="voice-content">
+            <text class="voice-name">{{item.voice}}</text>
+            <text class="voice-model">模型: {{item.target_model}}</text>
+          </view>
+        </view>
+        <view class="voice-actions" wx:if="{{!batchMode}}">
+          <button class="copy-btn" size="mini" bindtap="onCopyVoice" data-voice="{{item.voice}}">
+            复制
+          </button>
+          <button class="delete-btn" size="mini" bindtap="onDeleteVoice" data-voice="{{item.voice}}" data-creator-openid="{{item.user_info ? item.user_info.openid : ''}}" wx:if="{{!item.user_info || item.user_info.type !== 'saved'}}">
+            删除
+          </button>
+        </view>
+      </view>
+      <view class="voice-footer">
+        <text class="voice-time">创建时间: {{item.gmt_create}}</text>
+      </view>
+      <view class="voice-users" wx:if="{{item.user_info && !batchMode}}">
+        <view class="user-info-row">
+          <text class="user-label">{{item.user_info.type === 'saved' ? '保存者' : '创建者'}} OpenID:</text>
+          <view class="user-value user-value-clickable" bindtap="onCopyOpenid" data-openid="{{item.user_info.openid}}">
+            <text>{{item.user_info.openid}}</text>
+            <text class="copy-icon">📋</text>
+          </view>
+        </view>
+        <view class="user-info-row">
+          <text class="user-label">音色名称:</text>
+          <text class="user-value">{{item.user_info.voice_name}}</text>
+        </view>
+        <view class="user-type-badge" wx:if="{{item.user_info.type === 'saved'}}">
+          <text class="badge-text">已保存</text>
+        </view>
+       
+      </view>
+    </view>
+  </view>
+
+  <!-- 空状态 -->
+  <view class="empty-state" wx:if="{{!loading && voiceList.length === 0}}">
+    <view class="empty-icon">🎙️</view>
+    <text class="empty-text">暂无音色</text>
+    <text class="empty-tip">您还没有创建任何音色</text>
+  </view>
+
+  <!-- 加载状态 -->
+  <view class="loading-state" wx:if="{{loading}}">
+    <text class="loading-text">加载中...</text>
+  </view>
+</view>

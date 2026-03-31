@@ -48,6 +48,13 @@ Page({
     });
   },
 
+  // 音色管理
+  onVoiceManage() {
+    wx.navigateTo({
+      url: '/pages/voice-manage/voice-manage'
+    });
+  },
+
   // 发票开具
   onInvoice() {
     wx.showToast({

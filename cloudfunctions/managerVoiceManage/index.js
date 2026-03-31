@@ -7,6 +7,9 @@ cloud.init({
   env: cloud.DYNAMIC_CURRENT_ENV
 })
 
+const db = cloud.database()
+const _ = db.command
+
 // 阿里云 DashScope API 配置
 const DASHSCOPE_API_KEY = process.env.QWEN_API_KEY
 const DASHSCOPE_API_URL = 'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization'
@@ -48,7 +51,7 @@ function sendPostRequest(url, data) {
         try {
           const result = JSON.parse(responseData)
           console.log('[VoiceManage] 响应状态:', res.statusCode)
-          console.log('[VoiceManage] 响应数据:', JSON.stringify(result, null, 2))
+          //console.log('[VoiceManage] 响应数据:', JSON.stringify(result, null, 2))
 
           if (res.statusCode === 200) {
             resolve(result)
@@ -74,15 +77,19 @@ function sendPostRequest(url, data) {
 
 /**
  * 查询音色列表
+ * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)，默认 clone
  * @param {Number} pageIndex - 页码索引，默认 0
  * @param {Number} pageSize - 每页数量，默认 10
  * @returns {Promise<Object>} 音色列表
  */
-async function listVoices(pageIndex = 0, pageSize = 10) {
-  console.log('[VoiceManage] 查询音色列表，page_index:', pageIndex, 'page_size:', pageSize)
+async function listVoices(voiceType = 'clone', pageIndex = 0, pageSize = 10) {
+  console.log('[VoiceManage] 查询音色列表，voice_type:', voiceType, 'page_index:', pageIndex, 'page_size:', pageSize)
+
+  // 根据音色类型选择 model
+  const model = voiceType === 'design' ? 'qwen-voice-design' : 'qwen-voice-enrollment'
 
   const payload = {
-    model: 'qwen-voice-enrollment',
+    model: model,
     input: {
       action: 'list',
       page_index: pageIndex,
@@ -91,12 +98,64 @@ async function listVoices(pageIndex = 0, pageSize = 10) {
   }
 
   try {
+    // 调用阿里云 API 查询音色列表
     const response = await sendPostRequest(DASHSCOPE_API_URL, payload)
+    const voiceList = response.output?.voice_list || []
+
+    console.log('[VoiceManage] 获取到音色列表，数量:', voiceList.length, '类型:', voiceType)
+
+    // 查询数据库中所有用户的音色记录（包含创建和保存）
+    const savedVoicesResult = await db.collection('user_saved_voices').get()
+    const savedRecords = savedVoicesResult.data || []
+
+    console.log('[VoiceManage] 查询到用户音色记录，数量:', savedRecords.length)
+
+    // 构建音色到用户信息的映射：voice_id -> {openid, voice_name, type: 'saved'|'creator'}
+    const voiceUserMap = {}
+
+    savedRecords.forEach(record => {
+      const openid = record.openid
+      const savedList = record.list || []
+
+      savedList.forEach(savedVoice => {
+        const voiceId = savedVoice.voice_id || savedVoice.voice
+        const voiceName = savedVoice.voice_name || savedVoice.name
+        const isSaved = savedVoice.isSaved || false
+
+        // 每个音色只记录第一个用户，优先记录已保存的（isSaved = true）
+        if (voiceId && !voiceUserMap[voiceId]) {
+          voiceUserMap[voiceId] = {
+            openid: openid,
+            voice_name: voiceName,
+            type: isSaved ? 'saved' : 'creator'
+          }
+        }
+      })
+    })
+
+    console.log('[VoiceManage] 音色用户映射:', JSON.stringify(voiceUserMap))
+    console.log('[VoiceManage] 音色列表示例:', JSON.stringify(voiceList.slice(0, 2)))
+
+    // 为每个音色添加用户信息
+    const enhancedVoiceList = voiceList.map(voice => {
+      const voiceId = voice.voice
+      const userInfo = voiceUserMap[voiceId] || null
+
+      console.log('[VoiceManage] 音色:', voiceId, '用户信息:', userInfo ? `${userInfo.openid} (${userInfo.type})` : '无')
+
+      return {
+        ...voice,
+        voice_type: voiceType, // 添加音色类型
+        user_info: userInfo // 用户信息 {openid, voice_name, type: 'saved'|'creator'}，无则为 null
+      }
+    })
+
     return {
       code: 0,
       message: 'success',
       data: {
-        voice_list: response.output?.voice_list || [],
+        voice_list: enhancedVoiceList,
+        voice_type: voiceType,
         request_id: response.request_id
       }
     }
@@ -109,17 +168,22 @@ async function listVoices(pageIndex = 0, pageSize = 10) {
 /**
  * 删除音色
  * @param {String} voice - 音色名称
+ * @param {String} creatorOpenid - 创建者 openid
+ * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)，默认 clone
  * @returns {Promise<Object>} 删除结果
  */
-async function deleteVoice(voice) {
-  console.log('[VoiceManage] 删除音色，voice:', voice)
+async function deleteVoice(voice, creatorOpenid, voiceType = 'clone') {
+  console.log('[VoiceManage] 删除音色，voice:', voice, 'creator_openid:', creatorOpenid, 'type:', voiceType)
 
   if (!voice) {
     throw new Error('音色名称不能为空')
   }
 
+  // 根据音色类型选择 model
+  const model = voiceType === 'design' ? 'qwen-voice-design' : 'qwen-voice-enrollment'
+
   const payload = {
-    model: 'qwen-voice-enrollment',
+    model: model,
     input: {
       action: 'delete',
       voice: voice
@@ -127,7 +191,61 @@ async function deleteVoice(voice) {
   }
 
   try {
+    // 先调用阿里云 API 删除音色
     const response = await sendPostRequest(DASHSCOPE_API_URL, payload)
+
+    // 删除成功后，更新 tts_clone_design_logs 表中相关日志
+    console.log('[VoiceManage] 开始更新日志表中的音色信息')
+
+    try {
+      // 如果有创建者 openid，直接查询该用户的日志记录
+      if (creatorOpenid) {
+        const record = await db.collection('tts_clone_design_logs')
+          .doc(creatorOpenid)
+          .get()
+
+        if (record.data && record.data.logs) {
+          const logs = record.data.logs
+          let needUpdate = false
+
+          // 检查 logs 数组中是否有匹配的 voice_id
+          const updatedLogs = logs.map(log => {
+            if (log.voice_id === voice) {
+              console.log('[VoiceManage] 找到匹配日志, openid:', creatorOpenid)
+              needUpdate = true
+              return {
+                ...log,
+                voice_id: 'invalid',
+                voice_name: 'invalid'
+              }
+            }
+            return log
+          })
+
+          // 如果有需要更新的日志，执行更新
+          if (needUpdate) {
+            await db.collection('tts_clone_design_logs')
+              .doc(creatorOpenid)
+              .update({
+                data: {
+                  logs: updatedLogs
+                }
+              })
+            console.log('[VoiceManage] 日志更新完成')
+          } else {
+            console.log('[VoiceManage] 日志中未找到该音色')
+          }
+        } else {
+          console.log('[VoiceManage] 未找到日志记录')
+        }
+      } else {
+        console.log('[VoiceManage] 未提供 openid，跳过日志更新')
+      }
+    } catch (dbErr) {
+      console.error('[VoiceManage] 更新日志表失败:', dbErr)
+      // 日志表更新失败不影响删除操作的成功状态
+    }
+
     return {
       code: 0,
       message: 'success',
@@ -155,7 +273,7 @@ exports.main = async (event, context) => {
     }
   }
 
-  const { action, voice, page_index = 0, page_size = 10 } = event
+  const { action, voice, creator_openid, voice_type = 'clone', page_index = 0, page_size = 10 } = event
 
   // 验证 API Key
   if (!DASHSCOPE_API_KEY) {
@@ -173,12 +291,12 @@ exports.main = async (event, context) => {
     switch (action) {
       case 'list':
         // 查询音色列表
-        result = await listVoices(page_index, page_size)
+        result = await listVoices(voice_type, page_index, page_size)
         break
 
       case 'delete':
         // 删除音色
-        result = await deleteVoice(voice)
+        result = await deleteVoice(voice, creator_openid, voice_type)
         break
 
       default:

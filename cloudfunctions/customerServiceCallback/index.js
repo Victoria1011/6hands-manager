@@ -1,11 +1,113 @@
 // 云函数入口文件
 const cloud = require('wx-server-sdk')
+const https = require('https')
 
 cloud.init({
   env: cloud.DYNAMIC_CURRENT_ENV
 })
 
 const db = cloud.database()
+
+// 企业微信机器人 Webhook URL
+const QY_WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=ea6d8cc7-b50b-4072-9f8e-eb830e5b6a90'
+
+/**
+ * 发送消息到企业微信机器人
+ * @param {Object} messageData - 消息数据
+ */
+async function sendToQyWebhook(messageData) {
+  return new Promise((resolve, reject) => {
+    try {
+      // 构建消息内容（Markdown 格式）
+      let content = ''
+
+      // 根据消息类型格式化内容
+      if (messageData.msg_type === 'image') {
+        
+        content += '**🔗 图片链接：**\n> [点击查看](' + messageData.image_url + ')\n\n'
+        content += '![](' + messageData.image_url + ')\n\n'
+        content += '**📷 消息类型：**> 图片\n\n'
+      } else if (messageData.msg_type === 'miniprogramapp') {
+       
+        content += '**📝 标题：**> ' + (messageData.content || '-') + '\n\n'
+        content += '**📂 AppID：**> `' + messageData.app_id + '`\n\n'
+        content += '**🛣️ 页面路径：**> `' + messageData.page_path + '`\n\n'
+        content += '**📱 消息类型：**> 小程序卡片\n\n'
+      } else {
+        content += (messageData.content || '(空)') + '\n\n'
+        content += '**💬 消息类型：**> 文本\n\n'
+      }
+
+      content += new Date(messageData.create_time).toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }) + '\n\n\n'
+      content += `**👤 用户 OpenID**\n> \`${messageData.from_openid}\`\n\n`
+
+      const payload = {
+        msgtype: 'markdown',
+        markdown: {
+          content: content
+        }
+      }
+
+      const postData = JSON.stringify(payload)
+      const url = new URL(QY_WEBHOOK_URL)
+
+      const options = {
+        hostname: url.hostname,
+        port: 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData)
+        }
+      }
+
+      console.log('[CustomerServiceCallback] 发送到企业微信机器人')
+
+      const req = https.request(options, (res) => {
+        let responseData = ''
+
+        res.on('data', (chunk) => {
+          responseData += chunk
+        })
+
+        res.on('end', () => {
+          try {
+            const result = JSON.parse(responseData)
+            console.log('[CustomerServiceCallback] 企业微信响应:', JSON.stringify(result))
+
+            if (res.statusCode === 200 && result.errcode === 0) {
+              resolve(result)
+            } else {
+              reject(new Error(`企业微信推送失败: ${res.statusCode} - ${responseData}`))
+            }
+          } catch (err) {
+            console.error('[CustomerServiceCallback] 解析企业微信响应失败:', err)
+            reject(err)
+          }
+        })
+      })
+
+      req.on('error', (error) => {
+        console.error('[CustomerServiceCallback] 企业微信请求失败:', error)
+        reject(error)
+      })
+
+      req.write(postData)
+      req.end()
+    } catch (err) {
+      console.error('[CustomerServiceCallback] 发送到企业微信异常:', err)
+      reject(err)
+    }
+  })
+}
 
 // 云函数入口函数
 exports.main = async (event, context) => {
@@ -183,6 +285,15 @@ exports.main = async (event, context) => {
       }
 
       console.log('[CustomerServiceCallback] 消息保存成功')
+
+      // 推送到企业微信机器人
+      try {
+        await sendToQyWebhook(messageData)
+        console.log('[CustomerServiceCallback] 企业微信推送成功')
+      } catch (qyErr) {
+        console.error('[CustomerServiceCallback] 企业微信推送失败:', qyErr)
+        // 企业微信推送失败不影响主流程
+      }
     } else {
       console.warn('[CustomerServiceCallback] 消息缺少必要字段 FromUserName 或 MsgId')
     }

@@ -4,11 +4,15 @@ const app = getApp()
 Page({
   data: {
     voiceList: [],
+    allVoiceList: [], // 所有账号的音色列表
     loading: false,
     pageIndex: 0,
     pageSize: 50,
     savedVoiceCount: 0,
     currentType: 'clone', // 当前音色类型：clone(声音克隆) 或 design(声音设计)
+    currentAccount: 'all', // 当前账号：all(全部), main(主账号), v(V账号), w(W账号)
+    accountStats: { main: 0, v: 0, w: 0 }, // 各账号音色数量统计
+    accountNames: { main: '主账号', v: 'V账号', w: 'W账号' }, // 账号名称映射
     batchMode: false, // 批量操作模式
     selectedVoices: {}, // 已选择的音色: {voice: true/false}
     selectedCount: 0 // 已选择数量
@@ -25,6 +29,43 @@ Page({
     // 页面显示时刷新列表，但需要先检查登录状态
     if (!this.checkIsLoggedIn()) return
     this.loadVoiceList()
+  },
+
+  // 切换账号
+  switchAccount(e) {
+    const account = e.currentTarget.dataset.account
+    if (account === this.data.currentAccount) return
+
+    console.log('[VoiceManage] 切换账号:', account)
+    this.setData({
+      currentAccount: account
+    })
+
+    // 根据账号过滤音色列表
+    this.filterVoiceList()
+  },
+
+  // 根据当前选择的账号过滤音色列表
+  filterVoiceList() {
+    const allVoiceList = this.data.allVoiceList
+    const currentAccount = this.data.currentAccount
+
+    let filteredList = []
+    if (currentAccount === 'all') {
+      filteredList = allVoiceList
+    } else {
+      filteredList = allVoiceList.filter(voice => voice.account_type === currentAccount)
+    }
+
+    // 计算已保存的音色数量
+    const savedVoiceCount = filteredList.filter(voice => voice.user_info && voice.user_info.type === 'saved').length
+
+    this.setData({
+      voiceList: filteredList,
+      savedVoiceCount: savedVoiceCount
+    })
+
+    console.log('[VoiceManage] 账号过滤完成，当前账号:', currentAccount, '音色数量:', filteredList.length)
   },
 
   // 检查是否已登录
@@ -77,14 +118,30 @@ Page({
 
       if (res.result.code === 0) {
         const voiceList = res.result.data.voice_list || []
+        const accountStats = res.result.data.account_stats || { main: 0, v: 0, w: 0 }
+
         console.log('[VoiceManage] 音色列表详情:', JSON.stringify(voiceList, null, 2))
+        console.log('[VoiceManage] 账号统计:', accountStats)
+
+        // 保存完整的音色列表
+        const allVoiceList = voiceList
+
+        // 根据当前选择的账号过滤
+        let filteredList = []
+        if (this.data.currentAccount === 'all') {
+          filteredList = allVoiceList
+        } else {
+          filteredList = allVoiceList.filter(voice => voice.account_type === this.data.currentAccount)
+        }
 
         // 计算已保存的音色数量（type === 'saved'）
-        const savedVoiceCount = voiceList.filter(voice => voice.user_info && voice.user_info.type === 'saved').length
+        const savedVoiceCount = filteredList.filter(voice => voice.user_info && voice.user_info.type === 'saved').length
 
         this.setData({
-          voiceList: voiceList,
-          savedVoiceCount: savedVoiceCount
+          allVoiceList: allVoiceList,
+          voiceList: filteredList,
+          savedVoiceCount: savedVoiceCount,
+          accountStats: accountStats
         })
       } else {
         wx.showToast({
@@ -114,6 +171,7 @@ Page({
     this.setData({
       currentType: type,
       voiceList: [],
+      allVoiceList: [],
       savedVoiceCount: 0,
       pageIndex: 0 // 重置页码
     })
@@ -160,6 +218,7 @@ Page({
   async onDeleteVoice(e) {
     const voice = e.currentTarget.dataset.voice
     const creatorOpenid = e.currentTarget.dataset.creatorOpenid || ''
+    const accountType = e.currentTarget.dataset.accountType || 'main'
 
     // 确认删除
     wx.showModal({
@@ -169,14 +228,14 @@ Page({
       confirmColor: '#ff4d4f',
       success: async (res) => {
         if (res.confirm) {
-          await this.deleteVoice(voice, creatorOpenid)
+          await this.deleteVoice(voice, creatorOpenid, accountType)
         }
       }
     })
   },
 
   // 执行删除
-  async deleteVoice(voice, creatorOpenid) {
+  async deleteVoice(voice, creatorOpenid, accountType = 'main') {
     wx.showLoading({
       title: '删除中...'
     })
@@ -184,7 +243,7 @@ Page({
     try {
       // 获取 token
       const token = app.getToken()
-      console.log('[VoiceManage] 开始删除音色:', voice, 'creator_openid:', creatorOpenid, '类型:', this.data.currentType)
+      console.log('[VoiceManage] 开始删除音色:', voice, 'creator_openid:', creatorOpenid, '类型:', this.data.currentType, '账号:', accountType)
 
       const res = await app.globalData.cloud.callFunction({
         name: 'managerVoiceManage',
@@ -193,7 +252,8 @@ Page({
           action: 'delete',
           voice_type: this.data.currentType,
           voice: voice,
-          creator_openid: creatorOpenid
+          creator_openid: creatorOpenid,
+          account_type: accountType
         }
       })
 
@@ -321,7 +381,8 @@ Page({
       .filter(voice => selectedVoices[voice.voice] && (!voice.user_info || voice.user_info.type !== 'saved'))
       .map(voice => ({
         voice: voice.voice,
-        creatorOpenid: voice.user_info ? voice.user_info.openid : ''
+        creatorOpenid: voice.user_info ? voice.user_info.openid : '',
+        accountType: voice.account_type || 'main'
       }))
 
     console.log('[VoiceManage] 准备批量删除音色:', voicesToDelete)
@@ -336,7 +397,8 @@ Page({
             action: 'delete',
             voice_type: this.data.currentType,
             voice: item.voice,
-            creator_openid: item.creatorOpenid
+            creator_openid: item.creatorOpenid,
+            account_type: item.accountType
           }
         })
 

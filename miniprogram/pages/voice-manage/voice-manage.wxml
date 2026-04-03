@@ -30,6 +30,38 @@
       </view>
     </view>
 
+    <!-- 账号选项卡 -->
+    <view class="account-tabs" wx:if="{{!loading}}">
+      <view
+        class="account-tab {{currentAccount === 'all' ? 'account-tab-active' : ''}}"
+        bindtap="switchAccount"
+        data-account="all"
+      >
+        全部 ({{voiceList.length}})
+      </view>
+      <view
+        class="account-tab {{currentAccount === 'main' ? 'account-tab-active' : ''}}"
+        bindtap="switchAccount"
+        data-account="main"
+      >
+        {{accountNames.main}} ({{accountStats.main}})
+      </view>
+      <view
+        class="account-tab {{currentAccount === 'v' ? 'account-tab-active' : ''}}"
+        bindtap="switchAccount"
+        data-account="v"
+      >
+        {{accountNames.v}} ({{accountStats.v}})
+      </view>
+      <view
+        class="account-tab {{currentAccount === 'w' ? 'account-tab-active' : ''}}"
+        bindtap="switchAccount"
+        data-account="w"
+      >
+        {{accountNames.w}} ({{accountStats.w}})
+      </view>
+    </view>
+
     <!-- 批量操作工具栏 -->
     <view class="batch-toolbar" wx:if="{{batchMode}}">
       <view class="batch-select-all" bindtap="toggleSelectAll">
@@ -75,13 +107,16 @@
           <button class="copy-btn" size="mini" bindtap="onCopyVoice" data-voice="{{item.voice}}">
             复制
           </button>
-          <button class="delete-btn" size="mini" bindtap="onDeleteVoice" data-voice="{{item.voice}}" data-creator-openid="{{item.user_info ? item.user_info.openid : ''}}" wx:if="{{!item.user_info || item.user_info.type !== 'saved'}}">
+          <button class="delete-btn" size="mini" bindtap="onDeleteVoice" data-voice="{{item.voice}}" data-creator-openid="{{item.user_info ? item.user_info.openid : ''}}" data-account-type="{{item.account_type}}" wx:if="{{!item.user_info || item.user_info.type !== 'saved'}}">
             删除
           </button>
         </view>
       </view>
       <view class="voice-footer">
         <text class="voice-time">创建时间: {{item.gmt_create}}</text>
+        <view class="voice-account-badge">
+          <text class="account-badge-text">{{accountNames[item.account_type] || item.account_type}}</text>
+        </view>
       </view>
       <view class="voice-users" wx:if="{{item.user_info && !batchMode}}">
         <view class="user-info-row">

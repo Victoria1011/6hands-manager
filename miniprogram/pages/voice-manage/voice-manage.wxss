@@ -149,6 +149,35 @@
   border: none;
 }
 
+/* 账号选项卡 */
+.account-tabs {
+  display: flex;
+  background: #f5f5f5;
+  border-radius: 8rpx;
+  padding: 4rpx;
+  gap: 4rpx;
+  width: 100%;
+  margin-top: 20rpx;
+  box-shadow: 2rpx 2rpx 2rpx 2rpx rgba(0, 0, 0, 0.2);
+}
+
+.account-tab {
+  padding: 12rpx 16rpx;
+  font-size: 26rpx;
+  color: #666;
+  border-radius: 6rpx;
+  transition: all 0.3s;
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.account-tab-active {
+  background: #fff;
+  color: #1890ff;
+  font-weight: 600;
+}
+
 /* 统计卡片 */
 .stats-card {
   background: #fff;
@@ -313,6 +342,22 @@
 .voice-time {
   font-size: 24rpx;
   color: #999;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.voice-account-badge {
+  margin-top: 10rpx;
+}
+
+.account-badge-text {
+  font-size: 20rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 20rpx;
+  background: #1890ff;
+  color: #fff;
+  font-weight: 600;
 }
 
 .voice-users {

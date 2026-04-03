@@ -198,17 +198,17 @@ exports.main = async (event, context) => {
 
         console.log('[CustomerServiceCallback] sendContent:', sendContent)
 
-        const payResult = await cloud.openapi({
-          appid: 'wx126d0f048410f694'
-        }).customerServiceMessage.send({
-          touser: FromUserName,
-          msgtype: 'text',
-          "text":
-          {
-            "content": sendContent
-          }
-        })
-        console.log('[CustomerServiceCallback] 支付链接发送结果:', payResult)
+        // const payResult = await cloud.openapi({
+        //   appid: 'wx126d0f048410f694'
+        // }).customerServiceMessage.send({
+        //   touser: FromUserName,
+        //   msgtype: 'text',
+        //   "text":
+        //   {
+        //     "content": sendContent
+        //   }
+        // })
+        // console.log('[CustomerServiceCallback] 支付链接发送结果:', payResult)
 
         // 保存支付链接消息记录
         const payMessageRecord = {

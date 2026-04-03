@@ -41,6 +41,10 @@
           <view class="menu-icon">🎙️</view>
           <text class="menu-text">音色管理</text>
         </view>
+        <view class="menu-item" bindtap="onDatabase">
+          <view class="menu-icon">🗄️</view>
+          <text class="menu-text">数据库管理</text>
+        </view>
         <view class="menu-item" bindtap="onInvoice">
           <view class="menu-icon">📄</view>
           <text class="menu-text">发票开具</text>

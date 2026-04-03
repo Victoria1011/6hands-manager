@@ -55,6 +55,13 @@ Page({
     });
   },
 
+  // 数据库管理
+  onDatabase() {
+    wx.navigateTo({
+      url: '/pages/database-manage/database-manage'
+    });
+  },
+
   // 发票开具
   onInvoice() {
     wx.showToast({

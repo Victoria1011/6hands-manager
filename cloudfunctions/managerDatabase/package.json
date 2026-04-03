@@ -1,0 +1,9 @@
+{
+  "name": "managerDatabase",
+  "version": "1.0.0",
+  "description": "数据库管理云函数",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

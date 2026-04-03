@@ -1,0 +1,112 @@
+<view class="container">
+  <!-- 集合选择 -->
+  <view class="collection-section">
+    <view class="section-title">选择数据表</view>
+    <picker mode="selector" range="{{collections}}" bindchange="onCollectionSelect">
+      <view class="picker-container">
+        <text class="picker-text {{currentCollection ? '' : 'picker-placeholder'}}">{{currentCollection || '请选择数据表'}}</text>
+        <text class="picker-arrow">▼</text>
+      </view>
+    </picker>
+  </view>
+
+  <!-- 搜索 -->
+  <view class="search-section" wx:if="{{currentCollection}}">
+    <view class="search-row">
+      <view class="search-field-wrapper">
+        <input
+          class="search-input"
+          placeholder="字段名"
+          value="{{searchField}}"
+          bindinput="onSearchFieldInput"
+        />
+      </view>
+      <view class="search-value-wrapper">
+        <input
+          class="search-input"
+          placeholder="字段值"
+          value="{{searchValue}}"
+          bindinput="onSearchValueInput"
+        />
+      </view>
+      <button class="search-btn" bindtap="onSearch" size="mini">搜索</button>
+    </view>
+  </view>
+
+  <!-- 数据列表 -->
+  <view class="data-section" wx:if="{{currentCollection}}">
+    <view class="section-header">
+      <text class="section-title">数据列表 ({{currentCollection}})</text>
+      <text class="data-count">共 {{total}} 条</text>
+    </view>
+
+    <view class="data-list" wx:if="{{dataList.length > 0}}">
+      <view class="data-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
+        <view class="data-item-header">
+          <text class="data-id">ID: {{item._id}}</text>
+          <text class="data-action">点击编辑</text>
+        </view>
+        <view class="data-item-body">
+          <view class="data-field" wx:for="{{item}}" wx:for-item="val" wx:for-index="key" wx:key="key">
+            <text class="field-key">{{key}}:</text>
+            <text class="field-value">{{formatValue(val)}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 加载更多 -->
+    <view class="load-more" wx:if="{{hasMore}}" bindtap="onLoadMore">
+      <text>{{loading ? '加载中...' : '加载更多'}}</text>
+    </view>
+
+    <!-- 没有更多数据 -->
+    <view class="no-more" wx:if="{{!hasMore && dataList.length > 0}}">
+      <text>没有更多数据了</text>
+    </view>
+  </view>
+
+  <!-- 空状态 -->
+  <view class="empty-state" wx:if="{{!currentCollection}}">
+    <view class="empty-icon">🗄️</view>
+    <text class="empty-text">请选择数据表</text>
+  </view>
+
+  <view class="empty-state" wx:if="{{currentCollection && !loading && dataList.length === 0}}">
+    <view class="empty-icon">📭</view>
+    <text class="empty-text">暂无数据</text>
+  </view>
+
+  <!-- 加载状态 -->
+  <view class="loading-state" wx:if="{{loading}}">
+    <text class="loading-text">加载中...</text>
+  </view>
+
+  <!-- 编辑弹窗 -->
+  <view class="modal-mask" wx:if="{{showEditModal}}" bindtap="onCloseModal">
+    <view class="modal-content" catchtap>
+      <view class="modal-header">
+        <text class="modal-title">编辑数据</text>
+        <view class="modal-close" bindtap="onCloseModal">✕</view>
+      </view>
+
+      <view class="modal-body">
+        <view class="edit-field" wx:for="{{editData}}" wx:for-item="val" wx:for-index="key" wx:key="key">
+          <text class="field-label">{{key}}</text>
+          <textarea
+            class="field-textarea"
+            value="{{formatValue(val)}}"
+            bindinput="onEditFieldInput"
+            data-field="{{key}}"
+            auto-height
+          />
+        </view>
+      </view>
+
+      <view class="modal-footer">
+        <button class="btn btn-danger" bindtap="onDelete">删除</button>
+        <button class="btn btn-primary" bindtap="onSave">保存</button>
+      </view>
+    </view>
+  </view>
+</view>

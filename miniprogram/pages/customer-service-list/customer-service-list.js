@@ -45,10 +45,59 @@ Page({
     this.getMessageList()
   },
 
+  // 格式化时间显示
+  formatTime(timestamp) {
+    if (!timestamp) return ''
+
+    const now = new Date()
+    const msgTime = new Date(timestamp)
+    const diff = now.getTime() - msgTime.getTime()
+
+    // 转换为秒
+    const diffSeconds = Math.floor(diff / 1000)
+
+    // 小于1分钟：刚刚
+    if (diffSeconds < 60) {
+      return '刚刚'
+    }
+
+    // 小于1小时：X分钟前
+    const diffMinutes = Math.floor(diffSeconds / 60)
+    if (diffMinutes < 60) {
+      return `${diffMinutes}分钟前`
+    }
+
+    // 小于24小时：X小时前
+    const diffHours = Math.floor(diffMinutes / 60)
+    if (diffHours < 24) {
+      return `${diffHours}小时前`
+    }
+
+    // 判断是否是昨天
+    const nowDate = now.getDate()
+    const msgDate = msgTime.getDate()
+    const nowMonth = now.getMonth()
+    const msgMonth = msgTime.getMonth()
+
+    if (nowMonth === msgMonth && nowDate - msgDate === 1) {
+      // 昨天：显示 HH:mm
+      const hours = msgTime.getHours().toString().padStart(2, '0')
+      const minutes = msgTime.getMinutes().toString().padStart(2, '0')
+      return `昨天 ${hours}:${minutes}`
+    }
+
+    // 更早：显示 MM-DD HH:mm
+    const month = (msgTime.getMonth() + 1).toString().padStart(2, '0')
+    const day = msgTime.getDate().toString().padStart(2, '0')
+    const hours = msgTime.getHours().toString().padStart(2, '0')
+    const minutes = msgTime.getMinutes().toString().padStart(2, '0')
+    return `${month}-${day} ${hours}:${minutes}`
+  },
+
   // 获取客服消息列表
   async getMessageList() {
     this.setData({ loading: true })
-    
+
     try {
       // 获取 token
       const token = app.getToken()
@@ -77,8 +126,13 @@ Page({
 
       if (res.result.code === 0) {
         console.log('[CustomerServiceList] 获取成功，消息数量:', res.result.data?.length || 0)
+        // 格式化时间
+        const formattedList = (res.result.data || []).map(item => ({
+          ...item,
+          formattedTime: this.formatTime(item.last_time)
+        }))
         this.setData({
-          messageList: res.result.data || []
+          messageList: formattedList
         })
       } else {
         console.error('[CustomerServiceList] 云函数返回错误:', res.result.code, res.result.message)

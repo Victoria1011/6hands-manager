@@ -15,7 +15,8 @@ Page({
     showEditModal: false,
     editData: {},
     searchField: '',
-    searchValue: ''
+    searchValue: '',
+    expandedItems: {} // 记录展开的数据项 { _id: true }
   },
 
   onLoad() {
@@ -142,9 +143,12 @@ Page({
       console.log('[DatabaseManage] 数据查询结果:', res.result)
 
       if (res.result.code === 0) {
+        // 格式化数据
+        const formattedList = this.formatDataList(res.result.data.list)
+
         const newList = this.data.pageIndex === 0
-          ? res.result.data.list
-          : [...this.data.dataList, ...res.result.data.list]
+          ? formattedList
+          : [...this.data.dataList, ...formattedList]
 
         this.setData({
           dataList: newList,
@@ -165,6 +169,59 @@ Page({
       })
     } finally {
       this.setData({ loading: false })
+    }
+  },
+
+  // 格式化数据列表
+  formatDataList(list) {
+    if (!list || !Array.isArray(list)) return []
+
+    const collection = this.data.currentCollection
+
+    // 根据不同集合类型进行格式化
+    if (collection === 'tts_clone_design_logs') {
+      return list.map(item => {
+        if (item.logs && Array.isArray(item.logs)) {
+          item.logs = item.logs.map(log => ({
+            ...log,
+            formattedTime: this.formatTime(log.created_at)
+          }))
+        }
+        return item
+      })
+    } else if (collection === 'upload_file_logs') {
+      return list.map(item => ({
+        ...item,
+        formattedTime: this.formatTime(item.date)
+      }))
+    } else if (collection === 'api_key_usage') {
+      return list.map(item => ({
+        ...item,
+        updated_at_formatted: this.formatTime(item.updated_at),
+        clone_usage: item.clone_usage || {},
+        design_usage: item.design_usage || {}
+      }))
+    } else if (collection === 'coin_transactions') {
+      return list.map(item => ({
+        ...item,
+        updated_at_formatted: this.formatTime(item.updated_at),
+        transactions: (item.transactions || []).map(trans => ({
+          ...trans,
+          formattedTime: this.formatTime(trans.created_at)
+        }))
+      }))
+    } else {
+      // 通用格式化：处理常见的时间字段
+      const timeFields = ['created_at', 'updated_at', 'date', 'time', 'createTime', 'updateTime']
+      return list.map(item => {
+        const newItem = { ...item }
+        timeFields.forEach(field => {
+          if (newItem[field]) {
+            newItem[field + '_formatted'] = this.formatTime(newItem[field])
+          }
+        })
+        return newItem
+      })
     }
   },
 
@@ -371,6 +428,55 @@ Page({
       selectedItem: null,
       editData: {}
     })
+  },
+
+  // 判断是否是 tts_clone_design_logs 集合
+  isTtsCloneLogs() {
+    return this.data.currentCollection === 'tts_clone_design_logs'
+  },
+
+  // 展开/收起 logs 数组
+  onToggleLogs(e) {
+    const index = e.currentTarget.dataset.index
+    const item = this.data.dataList[index]
+    const expandedItems = { ...this.data.expandedItems }
+
+    if (expandedItems[item._id]) {
+      delete expandedItems[item._id]
+    } else {
+      expandedItems[item._id] = true
+    }
+
+    this.setData({ expandedItems })
+  },
+
+  // 展开/收起 transactions 数组
+  onToggleTransactions(e) {
+    const index = e.currentTarget.dataset.index
+    const item = this.data.dataList[index]
+    const expandedItems = { ...this.data.expandedItems }
+
+    if (expandedItems[item._id]) {
+      delete expandedItems[item._id]
+    } else {
+      expandedItems[item._id] = true
+    }
+
+    this.setData({ expandedItems })
+  },
+
+  // 格式化时间
+  formatTime(timestamp) {
+    if (!timestamp) return '-'
+
+    const date = new Date(timestamp)
+    const year = date.getFullYear()
+    const month = (date.getMonth() + 1).toString().padStart(2, '0')
+    const day = date.getDate().toString().padStart(2, '0')
+    const hours = date.getHours().toString().padStart(2, '0')
+    const minutes = date.getMinutes().toString().padStart(2, '0')
+
+    return `${year}-${month}-${day} ${hours}:${minutes}`
   },
 
   // 格式化显示

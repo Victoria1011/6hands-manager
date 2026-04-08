@@ -34,8 +34,7 @@
 
 .top-row {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
   margin-bottom: 12rpx;
 }
 
@@ -50,32 +49,61 @@
   color: #999;
 }
 
+.openid-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8rpx;
+  margin-top: 20rpx;
+}
+
+.openid-label {
+  font-size: 24rpx;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.openid-value {
+  flex: 1;
+  font-size: 22rpx;
+  color: #1f4467;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 4rpx;
+}
+.last-message-wrapper {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 .bottom-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  min-height: 40rpx;
 }
 
 .last-message {
-  flex: 1;
   font-size: 28rpx;
-  color: #999;
+  color: #222222;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-right: 16rpx;
+  width: 100%;
 }
 
 .badge {
   min-width: 36rpx;
   height: 36rpx;
   padding: 0 8rpx;
-  background-color: #fa5151;
+  background-color: #675151;
   border-radius: 18rpx;
   font-size: 20rpx;
   color: #fff;
   text-align: center;
   line-height: 36rpx;
+  flex-shrink: 0;
+  vertical-align: middle;
 }
 
 .empty {

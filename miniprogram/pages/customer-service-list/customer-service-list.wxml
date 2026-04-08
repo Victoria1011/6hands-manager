@@ -1,29 +1,29 @@
 <view class="container">
   <view class="message-list">
-    <view 
-      wx:for="{{messageList}}" 
-      wx:key="openid" 
-      class="message-item"
-      bindtap="goToChat"
-      data-openid="{{item.openid}}"
-    >
+    <view wx:for="{{messageList}}" wx:key="openid" class="message-item" bindtap="goToChat" data-openid="{{item.openid}}">
       <view class="avatar-wrapper">
         <image class="avatar" src="/images/icons/avatar.png" mode="aspectFill"></image>
       </view>
-      
+
       <view class="content-wrapper">
         <view class="top-row">
-          <text class="nickname">用户</text>
-          <text class="time">{{item.last_time}}</text>
+          <view class="openid-row">
+            <text class="openid-value" selectable>{{item.openid}}</text>
+          </view>
+          
         </view>
+
         <view class="bottom-row">
-          <text class="last-message" decode="true">
+
+          <view class="last-message" decode="true">
             {{item.last_message}}
-          </text>
+          </view>
+
           <view class="badge" wx:if="{{item.message_count > 0}}">
             {{item.message_count}}
           </view>
         </view>
+        <text class="time">{{item.formattedTime}}</text>
       </view>
     </view>
 

@@ -334,3 +334,413 @@
   background: #1890ff;
   color: #fff;
 }
+
+/* TTS Clone Logs 专用样式 */
+.tts-item {
+  background: #f9fbfd;
+  border-color: #e3f2fd;
+}
+
+.logs-count {
+  font-size: 24rpx;
+  color: #1890ff;
+  font-weight: 600;
+}
+
+.expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16rpx;
+  background: #e3f2fd;
+  border-radius: 8rpx;
+  margin-bottom: 0;
+  transition: all 0.3s;
+}
+
+.expand-btn:active {
+  background: #bbdefb;
+}
+
+.expand-btn text {
+  font-size: 24rpx;
+  color: #1890ff;
+}
+
+.logs-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+  padding-top: 16rpx;
+  margin-top: 16rpx;
+  border-top: 2rpx dashed #e3f2fd;
+}
+
+.log-item {
+  background: #fff;
+  border-radius: 8rpx;
+  padding: 20rpx;
+  border: 2rpx solid #e8e8e8;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+  padding-bottom: 12rpx;
+  border-bottom: 2rpx solid #f0f0f0;
+}
+
+.log-voice {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #333;
+}
+
+.log-status {
+  padding: 4rpx 16rpx;
+  border-radius: 20rpx;
+  font-size: 22rpx;
+  font-weight: 500;
+}
+
+.status-completed {
+  background: #e8f5e9;
+  color: #4caf50;
+}
+
+.status-failed {
+  background: #ffebee;
+  color: #f44336;
+}
+
+.status-processing {
+  background: #e3f2fd;
+  color: #2196f3;
+}
+
+.log-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.log-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+}
+
+.log-label {
+  font-size: 24rpx;
+  color: #999;
+  min-width: 100rpx;
+  flex-shrink: 0;
+}
+
+.log-value {
+  font-size: 24rpx;
+  color: #333;
+  flex: 1;
+  word-break: break-all;
+}
+
+.text-value {
+  color: #555;
+  line-height: 1.6;
+  max-height: 120rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.cost-value {
+  color: #f44336;
+  font-weight: 600;
+}
+
+/* Upload File Logs 专用样式 */
+.upload-item {
+  background: #f9fff9;
+  border-color: #e8f5e9;
+}
+
+.upload-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 2rpx solid #e8f5e9;
+}
+
+.upload-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+
+.upload-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+}
+
+.upload-label {
+  font-size: 26rpx;
+  color: #666;
+  min-width: 120rpx;
+  flex-shrink: 0;
+}
+
+.upload-value {
+  font-size: 26rpx;
+  color: #333;
+  flex: 1;
+  word-break: break-all;
+}
+
+.openid-value {
+  color: #1890ff;
+  font-family: monospace;
+}
+
+.file-id-value {
+  color: #4caf50;
+  font-family: monospace;
+  font-weight: 500;
+}
+
+/* API Key Usage 专用样式 */
+.apikey-item {
+  background: #fefefe;
+  border-color: #f0f0f0;
+}
+
+.apikey-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 2rpx solid #f0f0f0;
+}
+
+.apikey-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 24rpx;
+}
+
+.apikey-section {
+  background: #fafafa;
+  border-radius: 8rpx;
+  padding: 20rpx;
+  border: 2rpx solid #f0f0f0;
+}
+
+.apikey-section-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 16rpx;
+  padding-bottom: 12rpx;
+  border-bottom: 2rpx solid #e8e8e8;
+}
+
+.apikey-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20rpx;
+}
+
+.apikey-stat {
+  flex: 1;
+  min-width: 200rpx;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 12rpx 16rpx;
+  background: #fff;
+  border-radius: 6rpx;
+  border: 2rpx solid #e8e8e8;
+}
+
+.apikey-stat-label {
+  font-size: 26rpx;
+  color: #666;
+  min-width: 120rpx;
+}
+
+.apikey-stat-value {
+  font-size: 28rpx;
+  color: #1890ff;
+  font-weight: 600;
+}
+
+.apikey-time {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 16rpx;
+  background: #f5f5f5;
+  border-radius: 6rpx;
+}
+
+.apikey-time-label {
+  font-size: 26rpx;
+  color: #666;
+  min-width: 120rpx;
+}
+
+.apikey-time-value {
+  font-size: 26rpx;
+  color: #333;
+}
+
+/* Coin Transactions 专用样式 */
+.coin-item {
+  background: #fff8f8;
+  border-color: #ffecd9;
+}
+
+.coin-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 2rpx solid #ffecd9;
+}
+
+.coin-openid-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+.coin-label {
+  font-size: 26rpx;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.coin-openid-value {
+  font-size: 24rpx;
+  color: #1890ff;
+  font-family: monospace;
+  word-break: break-all;
+  flex: 1;
+}
+
+.coin-action {
+  font-size: 24rpx;
+  color: #1890ff;
+  flex-shrink: 0;
+}
+
+.transactions-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+  padding-top: 16rpx;
+  margin-top: 16rpx;
+  border-top: 2rpx dashed #ffecd9;
+}
+
+.transaction-item {
+  background: #fff;
+  border-radius: 8rpx;
+  padding: 20rpx;
+  border: 2rpx solid #ffecd9;
+}
+
+.transaction-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+  padding-bottom: 12rpx;
+  border-bottom: 2rpx solid #f0f0f0;
+}
+
+.transaction-type {
+  padding: 4rpx 16rpx;
+  border-radius: 20rpx;
+  font-size: 22rpx;
+  font-weight: 500;
+}
+
+.transaction-type.spend {
+  background: #ffebee;
+  color: #f44336;
+}
+
+.transaction-type.charge {
+  background: #e8f5e9;
+  color: #4caf50;
+}
+
+.transaction-amount {
+  font-size: 32rpx;
+  font-weight: 600;
+}
+
+.transaction-amount.spend {
+  color: #f44336;
+}
+
+.transaction-amount.charge {
+  color: #4caf50;
+}
+
+.transaction-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.transaction-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+}
+
+.transaction-label {
+  font-size: 24rpx;
+  color: #999;
+  min-width: 100rpx;
+  flex-shrink: 0;
+}
+
+.transaction-value {
+  font-size: 24rpx;
+  color: #333;
+  flex: 1;
+  word-break: break-all;
+}
+
+.coin-footer {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 16rpx;
+  margin-top: 16rpx;
+  background: #fff5f5;
+  border-radius: 6rpx;
+}
+
+.coin-footer-label {
+  font-size: 26rpx;
+  color: #666;
+}
+
+.coin-footer-value {
+  font-size: 26rpx;
+  color: #333;
+}

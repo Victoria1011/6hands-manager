@@ -11,16 +11,16 @@ const _ = db.command
 
 // 可管理的数据库集合列表
 const ALLOWED_COLLECTIONS = [
+  "api_key_usage",
+  'tts_clone_design_logs',
+  "upload_file_logs",
   'black_list',
   'coin_transactions',
   'coins',
   'customer_service_messages',
-  'no_pay_list',
-  'notify',
   'rate_limits',
   'recharge_orders',
   'refund_list',
-  'tts_clone_design_logs',
   'user_saved_voices',
   'users'
 ]

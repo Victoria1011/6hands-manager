@@ -41,15 +41,206 @@
     </view>
 
     <view class="data-list" wx:if="{{dataList.length > 0}}">
-      <view class="data-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
-        <view class="data-item-header">
-          <text class="data-id">ID: {{item._id}}</text>
-          <text class="data-action">点击编辑</text>
+      <!-- tts_clone_design_logs 专用展示 -->
+      <view wx:if="{{currentCollection === 'tts_clone_design_logs'}}">
+        <view class="data-item tts-item" wx:for="{{dataList}}" wx:key="_id">
+          <view class="data-item-header">
+            <text class="data-id">openid: {{item.openid}}</text>
+            <text class="logs-count">{{item.logs ? item.logs.length : 0}} 条记录</text>
+          </view>
+
+          <!-- 展开按钮 -->
+          <view class="expand-btn" bindtap="onToggleLogs" data-index="{{index}}">
+            <text>{{expandedItems[item._id] ? '▼ 收起' : '▶ 展开详情'}}</text>
+          </view>
+
+          <!-- 展开的 logs 详情 -->
+          <view class="logs-container" wx:if="{{expandedItems[item._id]}}">
+            <view class="log-item" wx:for="{{item.logs}}" wx:for-item="log" wx:for-index="logIndex" wx:key="log._id || logIndex">
+              <view class="log-header">
+                <text class="log-voice">{{log.voice_name || '未知声音'}}</text>
+                <text class="log-status {{log.status === 'completed' ? 'status-completed' : 'status-' + log.status}}">{{log.status || '未知'}}</text>
+              </view>
+              <view class="log-body">
+                <view class="log-row">
+                  <text class="log-label">文本:</text>
+                  <text class="log-value text-value">{{log.text || '-'}}</text>
+                </view>
+                <view class="log-row">
+                  <text class="log-label">模型:</text>
+                  <text class="log-value">{{log.target_model || '-'}}</text>
+                </view>
+                <view class="log-row">
+                  <text class="log-label">语言:</text>
+                  <text class="log-value">{{log.language || '-'}}</text>
+                </view>
+                <view class="log-row">
+                  <text class="log-label">成本:</text>
+                  <text class="log-value cost-value">{{log.cost || 0}}</text>
+                </view>
+                <view class="log-row">
+                  <text class="log-label">时间:</text>
+                  <text class="log-value">{{log.formattedTime}}</text>
+                </view>
+                <view class="log-row" wx:if="{{log.audio_file_id}}">
+                  <text class="log-label">音频ID:</text>
+                  <text class="log-value">{{log.audio_file_id}}</text>
+                </view>
+              </view>
+            </view>
+          </view>
         </view>
-        <view class="data-item-body">
-          <view class="data-field" wx:for="{{item}}" wx:for-item="val" wx:for-index="key" wx:key="key">
-            <text class="field-key">{{key}}:</text>
-            <text class="field-value">{{formatValue(val)}}</text>
+      </view>
+
+      <!-- upload_file_logs 专用展示 -->
+      <view wx:if="{{currentCollection === 'upload_file_logs'}}">
+        <view class="data-item upload-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
+          <view class="upload-item-header">
+            <text class="data-id">ID: {{item._id}}</text>
+            <text class="data-action">点击编辑</text>
+          </view>
+
+          <view class="upload-item-body">
+            <view class="upload-field">
+              <text class="upload-label">openid:</text>
+              <text class="upload-value openid-value" selectable>{{item.openid || '-'}}</text>
+            </view>
+            <view class="upload-field">
+              <text class="upload-label">file_ID:</text>
+              <text class="upload-value file-id-value" selectable>{{item.file_id || '-'}}</text>
+            </view>
+            <view class="upload-field">
+              <text class="upload-label">date:</text>
+              <text class="upload-value">{{item.formattedTime}}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <!-- api_key_usage 专用展示 -->
+      <view wx:if="{{currentCollection === 'api_key_usage'}}">
+        <view class="data-item apikey-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
+          <view class="apikey-item-header">
+            <text class="data-id">ID: {{item._id}}</text>
+            <text class="data-action">点击编辑</text>
+          </view>
+
+          <view class="apikey-item-body">
+            <!-- Clone Usage -->
+            <view class="apikey-section">
+              <view class="apikey-section-title">克隆使用统计</view>
+              <view class="apikey-stats">
+                <view class="apikey-stat">
+                  <text class="apikey-stat-label">key_num:</text>
+                  <text class="apikey-stat-value">{{item.clone_usage.key_num || 0}}</text>
+                </view>
+                <view class="apikey-stat">
+                  <text class="apikey-stat-label">key_v_num:</text>
+                  <text class="apikey-stat-value">{{item.clone_usage.key_v_num || 0}}</text>
+                </view>
+                <view class="apikey-stat">
+                  <text class="apikey-stat-label">key_w_num:</text>
+                  <text class="apikey-stat-value">{{item.clone_usage.key_w_num || 0}}</text>
+                </view>
+              </view>
+            </view>
+
+            <!-- Design Usage -->
+            <view class="apikey-section">
+              <view class="apikey-section-title">设计使用统计</view>
+              <view class="apikey-stats">
+                <view class="apikey-stat">
+                  <text class="apikey-stat-label">key_num:</text>
+                  <text class="apikey-stat-value">{{item.design_usage.key_num || 0}}</text>
+                </view>
+                <view class="apikey-stat">
+                  <text class="apikey-stat-label">key_v_num:</text>
+                  <text class="apikey-stat-value">{{item.design_usage.key_v_num || 0}}</text>
+                </view>
+                <view class="apikey-stat">
+                  <text class="apikey-stat-label">key_w_num:</text>
+                  <text class="apikey-stat-value">{{item.design_usage.key_w_num || 0}}</text>
+                </view>
+              </view>
+            </view>
+
+            <!-- 更新时间 -->
+            <view class="apikey-time">
+              <text class="apikey-time-label">更新时间:</text>
+              <text class="apikey-time-value">{{item.updated_at_formatted}}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <!-- coin_transactions 专用展示 -->
+      <view wx:if="{{currentCollection === 'coin_transactions'}}">
+        <view class="data-item coin-item" wx:for="{{dataList}}" wx:key="_id">
+          <view class="coin-item-header">
+            <view class="coin-openid-row">
+              <text class="coin-label">openid:</text>
+              <text class="coin-openid-value" selectable>{{item.openid || '-'}}</text>
+            </view>
+            <text class="coin-action" bindtap="onViewItem" data-index="{{index}}">点击编辑</text>
+          </view>
+
+          <!-- 展开按钮 -->
+          <view class="expand-btn" bindtap="onToggleTransactions" data-index="{{index}}">
+            <text>{{expandedItems[item._id] ? '▼ 收起交易记录' : '▶ 展开交易记录'}} ({{item.transactions.length || 0}} 条)</text>
+          </view>
+
+          <!-- 交易记录列表 -->
+          <view class="transactions-container" wx:if="{{expandedItems[item._id]}}">
+            <view class="transaction-item" wx:for="{{item.transactions}}" wx:for-item="trans" wx:for-index="transIndex" wx:key="transIndex">
+              <view class="transaction-header">
+                <text class="transaction-type {{trans.type}}">{{trans.type === 'spend' ? '消费' : '充值'}}</text>
+                <text class="transaction-amount {{trans.type}}">{{trans.type === 'spend' ? '-' : '+'}}{{trans.amount || 0}}</text>
+              </view>
+              <view class="transaction-body">
+                <view class="transaction-row">
+                  <text class="transaction-label">余额:</text>
+                  <text class="transaction-value">{{trans.balance || 0}}</text>
+                </view>
+                <view class="transaction-row" wx:if="{{trans.description}}">
+                  <text class="transaction-label">描述:</text>
+                  <text class="transaction-value">{{trans.description}}</text>
+                </view>
+                <view class="transaction-row" wx:if="{{trans.source}}">
+                  <text class="transaction-label">来源:</text>
+                  <text class="transaction-value">{{trans.source}}</text>
+                </view>
+                <view class="transaction-row" wx:if="{{trans.source_id}}">
+                  <text class="transaction-label">来源ID:</text>
+                  <text class="transaction-value">{{trans.source_id}}</text>
+                </view>
+                <view class="transaction-row">
+                  <text class="transaction-label">时间:</text>
+                  <text class="transaction-value">{{trans.formattedTime}}</text>
+                </view>
+              </view>
+            </view>
+          </view>
+
+          <!-- 更新时间 -->
+          <view class="coin-footer">
+            <text class="coin-footer-label">更新时间:</text>
+            <text class="coin-footer-value">{{item.updated_at_formatted}}</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 其他集合的通用展示 -->
+      <view wx:if="{{currentCollection !== 'tts_clone_design_logs' && currentCollection !== 'upload_file_logs' && currentCollection !== 'api_key_usage' && currentCollection !== 'coin_transactions'}}">
+        <view class="data-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
+          <view class="data-item-header">
+            <text class="data-id">ID: {{item._id}}</text>
+            <text class="data-action">点击编辑</text>
+          </view>
+          <view class="data-item-body">
+            <view class="data-field" wx:for="{{item}}" wx:for-item="val" wx:for-index="key" wx:key="key">
+              <text class="field-key">{{key}}:</text>
+              <text class="field-value">{{formatValue(val)}}</text>
+            </view>
           </view>
         </view>
       </view>

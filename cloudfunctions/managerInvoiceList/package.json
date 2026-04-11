@@ -1,0 +1,10 @@
+{
+  "name": "managerInvoiceList",
+  "version": "1.0.0",
+  "description": "获取发票列表云函数",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3",
+    "jsonwebtoken": "^8.5.1"
+  }
+}

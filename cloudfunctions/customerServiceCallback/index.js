@@ -192,23 +192,25 @@ exports.main = async (event, context) => {
           // 默认显示所有套餐
           sendContent = `点击下方套餐购买元宝：
 <a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=1">入门套餐 ¥1 (1万元宝)</a>
+
 <a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=2">标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 15 万元宝)</a>`
+
+<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 20 万元宝)</a>`
         }
 
         console.log('[CustomerServiceCallback] sendContent:', sendContent)
 
-        // const payResult = await cloud.openapi({
-        //   appid: 'wx126d0f048410f694'
-        // }).customerServiceMessage.send({
-        //   touser: FromUserName,
-        //   msgtype: 'text',
-        //   "text":
-        //   {
-        //     "content": sendContent
-        //   }
-        // })
-        // console.log('[CustomerServiceCallback] 支付链接发送结果:', payResult)
+        const payResult = await cloud.openapi({
+          appid: 'wx126d0f048410f694'
+        }).customerServiceMessage.send({
+          touser: FromUserName,
+          msgtype: 'text',
+          "text":
+          {
+            "content": sendContent
+          }
+        })
+        console.log('[CustomerServiceCallback] 支付链接发送结果:', payResult)
 
         // 保存支付链接消息记录
         const payMessageRecord = {

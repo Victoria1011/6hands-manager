@@ -1,0 +1,6 @@
+{
+  "usingComponents": {},
+  "navigationBarTitleText": "我的发票",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark"
+}

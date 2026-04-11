@@ -5,7 +5,8 @@
     "pages/customer-service-chat/customer-service-chat",
     "pages/refund-list/refund-list",
     "pages/voice-manage/voice-manage",
-    "pages/database-manage/database-manage"
+    "pages/database-manage/database-manage",
+    "pages/invoice-list/invoice-list"
   ],
   "window": {
     "backgroundColor": "#F6F6F6",

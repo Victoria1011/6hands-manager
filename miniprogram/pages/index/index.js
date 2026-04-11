@@ -64,9 +64,8 @@ Page({
 
   // 发票开具
   onInvoice() {
-    wx.showToast({
-      title: '发票开具功能',
-      icon: 'none'
+    wx.navigateTo({
+      url: '/pages/invoice-list/invoice-list'
     });
   }
 });

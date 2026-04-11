@@ -1,0 +1,263 @@
+<!--pages/invoice-list/invoice-list.wxml-->
+<view class="container">
+  <!-- 搜索栏 -->
+  <view class="search-bar">
+    <input class="search-input" placeholder="搜索发票抬头" value="{{keyword}}" bindinput="onSearchInput" bindconfirm="onSearch" />
+    <view class="search-btn" bindtap="onSearch">搜索</view>
+  </view>
+
+  <!-- 状态筛选 -->
+  <view class="status-tabs">
+    <view class="tab-item {{currentStatus === 'all' ? 'active' : ''}}" data-status="all" bindtap="onStatusChange">
+      全部
+    </view>
+    <view class="tab-item {{currentStatus === 'reviewing' ? 'active' : ''}}" data-status="reviewing" bindtap="onStatusChange">
+      审核中
+    </view>
+    <view class="tab-item {{currentStatus === 'invoicing' ? 'active' : ''}}" data-status="invoicing" bindtap="onStatusChange">
+      开票中
+    </view>
+    <view class="tab-item {{currentStatus === 'completed' ? 'active' : ''}}" data-status="completed" bindtap="onStatusChange">
+      已完成
+    </view>
+  </view>
+
+  <!-- 发票列表 -->
+  <view class="invoice-list">
+    <block wx:if="{{list.length > 0}}">
+      <view class="invoice-card" wx:for="{{list}}" wx:key="_id" data-item="{{item}}" bindtap="onCardClick">
+        <view class="card-header">
+          <view class="header-left">
+            <view class="invoice-type-tag {{item.invoice_type}}">
+              {{item.invoice_type === 'normal' ? '普通发票' : '专用发票'}}
+            </view>
+            <view class="invoice-no">{{item.invoice_no}}</view>
+          </view>
+          <view class="status status-reviewing clickable" wx:if="{{item.status === 'reviewing'}}" bindtap="onReviewingClick" data-item="{{item}}">
+            {{item.status_text}}
+          </view>
+          <view class="status status-invoicing" wx:if="{{item.status === 'invoicing'}}">{{item.status_text}}</view>
+          <view class="status" wx:if="{{item.status === 'completed'}}">{{item.status_text}}</view>
+        </view>
+
+        <view class="card-body">
+          <view class="info-row">
+            <text class="label">抬头：</text>
+            <text class="value copyable" catchtap="copyText" data-text="{{item.title}}">{{item.title}}</text>
+          </view>
+          <view class="info-row" wx:if="{{item.invoice_owner_type === 'company'}}">
+            <text class="label">税号：</text>
+            <text class="value copyable" catchtap="copyText" data-text="{{item.tax_number}}">{{item.tax_number}}</text>
+          </view>
+
+          <view class="info-row" wx:if="{{item.company_address}}">
+            <text class="label">公司地址：</text>
+            <text class="value copyable" catchtap="copyText" data-text="{{item.company_address}}">{{item.company_address}}</text>
+          </view>
+          <view class="info-row" wx:if="{{item.telephone}}">
+            <text class="label">联系电话：</text>
+            <text class="value copyable" catchtap="copyText" data-text="{{item.telephone}}">{{item.telephone}}</text>
+          </view>
+          <view class="info-row" wx:if="{{item.bank_name}}">
+            <text class="label">开户银行：</text>
+            <text class="value copyable" catchtap="copyText" data-text="{{item.bank_name}}">{{item.bank_name}}</text>
+          </view>
+          <view class="info-row" wx:if="{{item.bank_account}}">
+            <text class="label">银行账号：</text>
+            <text class="value copyable" catchtap="copyText" data-text="{{item.bank_account}}">{{item.bank_account}}</text>
+          </view>
+          <view class="info-row" wx:if="{{item.remark}}">
+            <text class="label">备注：</text>
+            <text class="value remark copyable" catchtap="copyText" data-text="{{item.remark}}">{{item.remark}}</text>
+          </view>
+          <view class="info-row">
+            <text class="label">邮箱：</text>
+            <text class="value copyable" catchtap="copyText" data-text="{{item.email}}">{{item.email}}</text>
+          </view>
+          <view class="info-row">
+            <text class="label">金额：</text>
+            <text class="value amount copyable" catchtap="copyText" data-text="{{item.amount}}">¥{{item.amount}}</text>
+            <!-- 上传开票信息按钮 -->
+            <view class="upload-section" wx:if="{{item.status === 'invoicing'}}">
+              <view class="upload-btn" catchtap="onUploadInvoice" data-item="{{item}}">上传开票信息</view>
+            </view>
+          </view>
+          <view class="info-row" wx:if="{{item.invoice_url}}">
+            <text class="label">发票链接：</text>
+            <text class="value copyable invoice-link" catchtap="copyText" data-text="{{item.invoice_url}}">{{item.invoice_url}}</text>
+          </view>
+        </view>
+
+          <!-- 关联订单列表 -->
+          <view class="orders-section" wx:if="{{item.related_orders && item.related_orders.length > 0}}">
+            <view class="orders-title">关联订单（{{item.related_orders.length}}）</view>
+            <view class="order-item" wx:for="{{item.related_orders}}" wx:for-item="order" wx:key="order_no">
+              <view class="order-header">
+                <text class="order-no copyable" catchtap="copyText" data-text="{{order.order_no}}">{{order.order_no}}</text>
+                <text class="order-time">{{order.pay_time_text}}</text>
+              </view>
+              <view class="order-content">
+                <text class="order-tag" wx:if="{{order.package_name}}">{{order.package_name}}</text>
+                <text class="order-tag" wx:if="{{order.status}}">{{order.status}}</text>
+                <text class="order-tag" wx:if="{{order.refund_status}}">退款：{{order.refund_status}}</text>
+                <text class="order-tag order-amount-tag">¥{{order.amount}}</text>
+              </view>
+            </view>
+          </view>
+
+          
+
+        <view class="card-footer">
+          <view class="time">申请时间：{{item.created_at_text}}</view>
+        </view>
+      </view>
+    </block>
+
+    <!-- 空状态 -->
+    <view class="empty-state" wx:if="{{list.length === 0 && !loading}}">
+      <text class="empty-icon">📄</text>
+      <text class="empty-text">暂无发票记录</text>
+    </view>
+
+    <!-- 加载更多 -->
+    <view class="load-more" wx:if="{{hasMore && !loading}}">
+      <text class="load-more-text" bindtap="loadMore">加载更多</text>
+    </view>
+
+    <!-- 加载中 -->
+    <view class="loading" wx:if="{{loading}}">
+      <text class="loading-text">加载中...</text>
+    </view>
+  </view>
+
+  <!-- 上传开票信息弹窗 -->
+  <view class="modal-mask" wx:if="{{showUploadModal}}" bindtap="onCancelUpload">
+    <view class="modal-content" catchtap>
+      <view class="modal-header">
+        <text class="modal-title">上传开票信息</text>
+        <view class="close-btn" bindtap="onCancelUpload">✕</view>
+      </view>
+      <view class="modal-body">
+        <view class="form-item">
+          <text class="form-label">用户类型</text>
+          <input class="form-input" value="{{uploadForm.user_type}}" disabled />
+        </view>
+        <view class="form-item">
+          <text class="form-label">发票抬头 *</text>
+          <input class="form-input" placeholder="请输入发票抬头" value="{{uploadForm.title}}" bindinput="onFormInput" data-field="title" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">税号</text>
+          <input class="form-input" placeholder="请输入税号" value="{{uploadForm.tax_no}}" bindinput="onFormInput" data-field="tax_no" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">公司地址</text>
+          <input class="form-input" placeholder="请输入公司地址" value="{{uploadForm.address}}" bindinput="onFormInput" data-field="address" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">联系电话</text>
+          <input class="form-input" placeholder="请输入联系电话" value="{{uploadForm.phone_no}}" bindinput="onFormInput" data-field="phone_no" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">开户银行</text>
+          <input class="form-input" placeholder="请输入开户银行" value="{{uploadForm.bank_name}}" bindinput="onFormInput" data-field="bank_name" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">银行账号</text>
+          <input class="form-input" placeholder="请输入银行账号" value="{{uploadForm.bank_account}}" bindinput="onFormInput" data-field="bank_account" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">邮箱 *</text>
+          <input class="form-input" placeholder="请输入邮箱" value="{{uploadForm.email}}" bindinput="onFormInput" data-field="email" />
+        </view>
+      </view>
+      <view class="modal-footer">
+        <view class="btn cancel-btn" bindtap="onCancelUpload">取消</view>
+        <view class="btn confirm-btn" bindtap="onConfirmUpload">确认上传</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 获取发票详情弹窗 -->
+  <view class="modal-mask" wx:if="{{showInvoiceDetailModal}}" bindtap="onCancelInvoiceDetail">
+    <view class="modal-content invoice-detail-modal" catchtap>
+      <view class="modal-header">
+        <text class="modal-title">{{hasFetchedInvoiceDetail ? '确认发票详情' : '获取发票详情'}}</text>
+        <view class="close-btn" bindtap="onCancelInvoiceDetail">✕</view>
+      </view>
+      <view class="modal-body">
+        <!-- 输入区域 -->
+        <view class="input-section">
+          <view class="form-item">
+            <text class="form-label">发票链接</text>
+            <input class="form-input" placeholder="请输入发票链接或扫码" value="{{invoiceUrl}}" bindinput="onInvoiceUrlInput" disabled="{{hasFetchedInvoiceDetail}}" />
+          </view>
+          <view class="form-item">
+            <text class="form-label"></text>
+            <view class="scan-btn" bindtap="onScanCode" wx:if="{{!hasFetchedInvoiceDetail}}">
+              <text class="scan-icon">📷</text>
+              <text class="scan-text">扫码获取链接</text>
+            </view>
+          </view>
+        </view>
+
+        <!-- 获取到的发票详情 -->
+        <view class="invoice-detail-section" wx:if="{{hasFetchedInvoiceDetail && invoiceDetail}}">
+          <view class="detail-header">
+            <text class="detail-title">发票详情</text>
+            <view class="detail-warning" wx:if="{{invoiceDifferences.title || invoiceDifferences.tax_no}}">
+              ⚠️ 部分信息与申请时不一致
+            </view>
+          </view>
+          <view class="detail-content">
+            <view class="detail-row" wx:if="{{invoiceDetail.company_name}}">
+              <text class="detail-label">抬头：</text>
+              <view class="detail-value {{invoiceDifferences.title ? 'mismatch' : ''}}">
+                {{invoiceDetail.company_name}}
+              </view>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.tax_no}}">
+              <text class="detail-label">税号：</text>
+              <view class="detail-value {{invoiceDifferences.tax_no ? 'mismatch' : ''}}">
+                {{invoiceDetail.tax_no}}
+              </view>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.total_amount}}">
+              <text class="detail-label">金额：</text>
+              <text class="detail-value amount">{{invoiceDetail.total_amount}}</text>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.invoice_no}}">
+              <text class="detail-label">发票号：</text>
+              <text class="detail-value">{{invoiceDetail.invoice_no}}</text>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.invoice_time}}">
+              <text class="detail-label">开票时间：</text>
+              <text class="detail-value">{{invoiceDetail.invoice_time}}</text>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.company_address}}">
+              <text class="detail-label">公司地址：</text>
+              <text class="detail-value">{{invoiceDetail.company_address}}</text>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.telephone}}">
+              <text class="detail-label">联系电话：</text>
+              <text class="detail-value">{{invoiceDetail.telephone}}</text>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.bank_name}}">
+              <text class="detail-label">开户银行：</text>
+              <text class="detail-value">{{invoiceDetail.bank_name}}</text>
+            </view>
+            <view class="detail-row" wx:if="{{invoiceDetail.bank_account}}">
+              <text class="detail-label">银行账号：</text>
+              <text class="detail-value">{{invoiceDetail.bank_account}}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view class="modal-footer">
+        <view class="btn cancel-btn" bindtap="onCancelInvoiceDetail">取消</view>
+        <view class="btn confirm-btn" bindtap="onGetInvoiceDetail" wx:if="{{!hasFetchedInvoiceDetail}}">获取发票详情</view>
+        <view class="btn confirm-btn" bindtap="onConfirmUpdateInvoice" wx:if="{{hasFetchedInvoiceDetail}}">确认更新</view>
+      </view>
+    </view>
+  </view>
+</view>

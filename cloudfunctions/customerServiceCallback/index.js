@@ -23,12 +23,12 @@ async function sendToQyWebhook(messageData) {
 
       // 根据消息类型格式化内容
       if (messageData.msg_type === 'image') {
-        
+
         content += '**🔗 图片链接：**\n> [点击查看](' + messageData.image_url + ')\n\n'
         content += '![](' + messageData.image_url + ')\n\n'
         content += '**📷 消息类型：**> 图片\n\n'
       } else if (messageData.msg_type === 'miniprogramapp') {
-       
+
         content += '**📝 标题：**> ' + (messageData.content || '-') + '\n\n'
         content += '**📂 AppID：**> `' + messageData.app_id + '`\n\n'
         content += '**🛣️ 页面路径：**> `' + messageData.page_path + '`\n\n'
@@ -154,6 +154,16 @@ exports.main = async (event, context) => {
       const { Title, AppId, PagePath, ThumbMediaId, ThumbUrl } = event
       console.log('[CustomerServiceCallback] 处理小程序卡片消息')
 
+      // 从 PagePath 中提取 productID
+      let productID = ''
+      if (PagePath) {
+        const match = PagePath.match(/productId[=]([123])/)
+        if (match && match[1]) {
+          productID = match[1]
+        }
+      }
+      console.log('[CustomerServiceCallback] 提取到的 productID:', productID)
+
       messageData = {
         from_openid: FromUserName,
         to_username: ToUserName,
@@ -211,7 +221,26 @@ exports.main = async (event, context) => {
           }
         })
         console.log('[CustomerServiceCallback] 支付链接发送结果:', payResult)
-
+        // 记录到 ios-pay 数据库
+        if (FromUserName && productID) {
+          try {
+            const iosPayRecord = {
+              openid: FromUserName,
+              productID: productID,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            }
+            await db.collection('ios-pay').add({
+              data: iosPayRecord
+            })
+            console.log('[CustomerServiceCallback] 已记录到 ios-pay 数据库:', iosPayRecord)
+          } catch (dbErr) {
+            console.error('[CustomerServiceCallback] 记录到 ios-pay 数据库失败:', dbErr)
+            // 数据库记录失败不影响主流程
+          }
+        } else {
+          console.warn('[CustomerServiceCallback] openid 或 productID 缺失，跳过数据库记录')
+        }
         // 保存支付链接消息记录
         const payMessageRecord = {
           type: 'customer_to_user',

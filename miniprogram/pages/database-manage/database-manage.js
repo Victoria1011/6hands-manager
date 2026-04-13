@@ -16,7 +16,8 @@ Page({
     editData: {},
     searchField: '',
     searchValue: '',
-    expandedItems: {} // 记录展开的数据项 { _id: true }
+    expandedItems: {}, // 记录展开的数据项 { _id: true }
+    currentPlayingAudioId: null // 当前正在播放的音频ID
   },
 
   onLoad() {
@@ -24,6 +25,11 @@ Page({
     // 检查登录状态
     if (!this.checkIsLoggedIn()) return
     this.loadCollections()
+  },
+
+  onUnload() {
+    // 页面卸载时停止播放并清理音频播放器
+    this.stopAudio()
   },
 
   // 检查是否已登录
@@ -136,7 +142,7 @@ Page({
           where: where,
           pageIndex: this.data.pageIndex,
           pageSize: this.data.pageSize,
-          orderBy: { field: '_id', order: 'desc' }
+          orderBy: this.getOrderByField()
         }
       })
 
@@ -210,6 +216,12 @@ Page({
           formattedTime: this.formatTime(trans.created_at)
         }))
       }))
+    } else if (collection === 'users') {
+      return list.map(item => ({
+        ...item,
+        created_at_formatted: this.formatTime(item.created_at),
+        updated_at_formatted: this.formatTime(item.updated_at)
+      }))
     } else {
       // 通用格式化：处理常见的时间字段
       const timeFields = ['created_at', 'updated_at', 'date', 'time', 'createTime', 'updateTime']
@@ -240,6 +252,21 @@ Page({
     this.setData({
       searchField: e.detail.value
     })
+  },
+
+  // 获取排序字段
+  getOrderByField() {
+    const collection = this.data.currentCollection
+
+    // 特定集合使用特定字段排序
+    if (collection === 'upload_file_logs') {
+      return { field: 'date', order: 'desc' }
+    } else if (collection === 'users') {
+      return { field: 'created_at', order: 'desc' }
+    } else {
+      // 默认按 _id 降序
+      return { field: '_id', order: 'desc' }
+    }
   },
 
   // 搜索值输入
@@ -477,6 +504,98 @@ Page({
     const minutes = date.getMinutes().toString().padStart(2, '0')
 
     return `${year}-${month}-${day} ${hours}:${minutes}`
+  },
+
+  // 播放音频
+  onPlayAudio(e) {
+    const audioFileId = e.currentTarget.dataset.audioId
+
+    if (!audioFileId) {
+      wx.showToast({
+        title: '音频ID为空',
+        icon: 'none'
+      })
+      return
+    }
+
+    // 如果点击的是正在播放的音频，则停止播放
+    if (this.data.currentPlayingAudioId === audioFileId && this.innerAudioContext) {
+      this.stopAudio()
+      return
+    }
+
+    wx.showLoading({ title: '加载音频...' })
+
+    // 停止之前的播放
+    if (this.innerAudioContext) {
+      this.innerAudioContext.stop()
+      this.innerAudioContext.destroy()
+    }
+
+    // 使用 app.globalData.cloud 获取临时URL
+    app.globalData.cloud.getTempFileURL({
+      fileList: [audioFileId]
+    }).then(res => {
+      wx.hideLoading()
+
+      if (res.fileList && res.fileList.length > 0) {
+        const fileInfo = res.fileList[0]
+
+        if (fileInfo.status === 0) {
+          // 创建音频播放器
+          this.innerAudioContext = wx.createInnerAudioContext()
+          this.innerAudioContext.src = fileInfo.tempFileURL
+
+          this.innerAudioContext.onPlay(() => {
+            console.log('[DatabaseManage] 音频开始播放')
+            this.setData({ currentPlayingAudioId: audioFileId })
+            wx.showToast({
+              title: '开始播放',
+              icon: 'success',
+              duration: 1000
+            })
+          })
+
+          this.innerAudioContext.onError((err) => {
+            console.error('[DatabaseManage] 音频播放失败:', err)
+            wx.showToast({
+              title: '播放失败',
+              icon: 'none'
+            })
+            this.stopAudio()
+          })
+
+          this.innerAudioContext.onEnded(() => {
+            console.log('[DatabaseManage] 音频播放结束')
+            this.stopAudio()
+          })
+
+          this.innerAudioContext.play()
+        } else {
+          wx.showToast({
+            title: '获取音频URL失败',
+            icon: 'none'
+          })
+        }
+      }
+    }).catch(err => {
+      wx.hideLoading()
+      console.error('[DatabaseManage] 获取音频URL失败:', err)
+      wx.showToast({
+        title: '获取音频URL失败',
+        icon: 'none'
+      })
+    })
+  },
+
+  // 停止音频播放
+  stopAudio() {
+    if (this.innerAudioContext) {
+      this.innerAudioContext.stop()
+      this.innerAudioContext.destroy()
+      this.innerAudioContext = null
+    }
+    this.setData({ currentPlayingAudioId: null })
   },
 
   // 格式化显示

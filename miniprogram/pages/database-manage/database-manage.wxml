@@ -84,7 +84,7 @@
                 </view>
                 <view class="log-row" wx:if="{{log.audio_file_id}}">
                   <text class="log-label">音频ID:</text>
-                  <text class="log-value">{{log.audio_file_id}}</text>
+                  <text class="log-value audio-id-value" bindtap="onPlayAudio" data-audio-id="{{log.audio_file_id}}">{{log.audio_file_id}}</text>
                 </view>
               </view>
             </view>
@@ -229,8 +229,70 @@
         </view>
       </view>
 
+      <!-- users 专用展示 -->
+      <view wx:if="{{currentCollection === 'users'}}">
+        <view class="data-item user-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
+          <view class="user-item-header">
+            <view class="user-avatar-row">
+              <image class="user-avatar" wx:if="{{item.avatar}}" src="{{item.avatar}}" mode="aspectFill"></image>
+              <view class="user-avatar-placeholder" wx:else>👤</view>
+              <view class="user-info">
+                <text class="user-nickname">{{item.nickname || '未设置昵称'}}</text>
+                <text class="user-openid" selectable>{{item.openid || '-'}}</text>
+              </view>
+            </view>
+            <text class="user-action">点击编辑</text>
+          </view>
+
+          <view class="user-item-body">
+            <view class="user-coins-section">
+              <view class="user-coin">
+                <text class="user-coin-label">当前金币:</text>
+                <text class="user-coin-value coins-current">{{item.coins || 0}}</text>
+              </view>
+              <view class="user-coin">
+                <text class="user-coin-label">总金币:</text>
+                <text class="user-coin-value coins-total">{{item.total_coins || 0}}</text>
+              </view>
+            </view>
+
+            <view class="user-field">
+              <text class="user-field-label">状态码:</text>
+              <text class="user-field-value user-status-{{item.status}}">{{item.status || '-'}}</text>
+            </view>
+
+            <view class="user-field" wx:if="{{item.agreedToTerms !== undefined}}">
+              <text class="user-field-label">同意条款:</text>
+              <view class="user-field-value {{item.agreedToTerms ? 'status-agreed' : 'status-disagreed'}}">
+                {{item.agreedToTerms ? '✓ 已同意' : '✗ 未同意'}}
+              </view>
+            </view>
+
+            <view class="user-field" wx:if="{{item.refund_id}}">
+              <text class="user-field-label">退款ID:</text>
+              <text class="user-field-value refund-id-value" selectable>{{item.refund_id}}</text>
+            </view>
+
+            <view class="user-field" wx:if="{{item.refund_status}}">
+              <text class="user-field-label">退款状态:</text>
+              <text class="user-field-value">{{item.refund_status}}</text>
+            </view>
+
+            <view class="user-field">
+              <text class="user-field-label">注册时间:</text>
+              <text class="user-field-value">{{item.created_at_formatted}}</text>
+            </view>
+
+            <view class="user-field">
+              <text class="user-field-label">更新时间:</text>
+              <text class="user-field-value">{{item.updated_at_formatted}}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
       <!-- 其他集合的通用展示 -->
-      <view wx:if="{{currentCollection !== 'tts_clone_design_logs' && currentCollection !== 'upload_file_logs' && currentCollection !== 'api_key_usage' && currentCollection !== 'coin_transactions'}}">
+      <view wx:if="{{currentCollection !== 'tts_clone_design_logs' && currentCollection !== 'upload_file_logs' && currentCollection !== 'api_key_usage' && currentCollection !== 'coin_transactions' && currentCollection !== 'users'}}">
         <view class="data-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
           <view class="data-item-header">
             <text class="data-id">ID: {{item._id}}</text>

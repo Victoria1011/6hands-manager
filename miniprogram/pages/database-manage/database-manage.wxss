@@ -446,6 +446,18 @@
   word-break: break-all;
 }
 
+.audio-id-value {
+  color: #1890ff;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: all 0.3s;
+}
+
+.audio-id-value:active {
+  color: #096dd9;
+  opacity: 0.7;
+}
+
 .text-value {
   color: #555;
   line-height: 1.6;
@@ -743,4 +755,165 @@
 .coin-footer-value {
   font-size: 26rpx;
   color: #333;
+}
+
+/* Users 专用样式 */
+.user-item {
+  background: #fffaf0;
+  border-color: #fff8e1;
+}
+
+.user-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 2rpx solid #fff8e1;
+}
+
+.user-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+.user-avatar {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 50%;
+  border: 2rpx solid #ffd54f;
+  flex-shrink: 0;
+}
+
+.user-avatar-placeholder {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 50%;
+  background: #fff8e1;
+  border: 2rpx solid #ffd54f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40rpx;
+  flex-shrink: 0;
+}
+
+.user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+.user-nickname {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333;
+}
+
+.user-openid {
+  font-size: 22rpx;
+  color: #999;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.user-action {
+  font-size: 24rpx;
+  color: #ff9800;
+  flex-shrink: 0;
+}
+
+.user-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+
+.user-coins-section {
+  display: flex;
+  gap: 20rpx;
+  background: #fff;
+  padding: 10rpx;
+  border-radius: 8rpx;
+  border: 2rpx solid #ffd54f;
+}
+
+.user-coin {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8rpx;
+  padding: 8rpx;
+  background: #fff8e1;
+  border-radius: 6rpx;
+}
+
+.user-coin-label {
+  font-size: 22rpx;
+  color: #666;
+}
+
+.user-coin-value {
+  font-size: 36rpx;
+  font-weight: 700;
+}
+
+.user-coin-value.coins-current {
+  color: #ff9800;
+}
+
+.user-coin-value.coins-total {
+  color: #4caf50;
+}
+
+.user-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+}
+
+.user-field-label {
+  font-size: 26rpx;
+  color: #666;
+  min-width: 140rpx;
+  flex-shrink: 0;
+}
+
+.user-field-value {
+  font-size: 26rpx;
+  color: #333;
+  flex: 1;
+  word-break: break-all;
+}
+
+.user-field-value.user-status-1 {
+  color: #4caf50;
+  font-weight: 600;
+}
+
+.user-field-value.user-status-0 {
+  color: #f44336;
+  font-weight: 600;
+}
+
+.user-field-value.status-agreed {
+  color: #4caf50;
+  font-weight: 600;
+}
+
+.user-field-value.status-disagreed {
+  color: #f44336;
+  font-weight: 600;
+}
+
+.user-field-value.refund-id-value {
+  color: #9c27b0;
+  font-family: monospace;
+  font-weight: 500;
 }

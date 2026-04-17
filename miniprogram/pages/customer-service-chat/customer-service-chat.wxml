@@ -62,7 +62,15 @@
       scroll-into-view="{{scrollToBottom ? 'last-message' : ''}}"
       scroll-with-animation
     >
-    <view wx:if="{{loading}}" class="loading">
+    <!-- 刷新按钮 -->
+    <view class="refresh-btn-wrapper">
+      <button class="refresh-btn" bindtap="getMessages" size="mini" loading="{{loading}}">
+        <text class="refresh-icon">↻</text>
+        <text class="refresh-text">刷新</text>
+      </button>
+    </view>
+
+    <view wx:if="{{loading && messages.length === 0}}" class="loading">
       <text>加载中...</text>
     </view>
 

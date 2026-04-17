@@ -32,7 +32,8 @@ exports.main = async (event, context) => {
     // 添加实际需要访问的小程序 AppID
   ]
   const allowedOpenids = [
-    'oAfY648UXQt0aiK9GxpJEJxgdpiw'
+    'oAfY648UXQt0aiK9GxpJEJxgdpiw',
+    'oAfY641JRaWvKz3JXmXAC88fZVYY'
   ]
 
   // 检查来源方 AppID 是否在白名单中

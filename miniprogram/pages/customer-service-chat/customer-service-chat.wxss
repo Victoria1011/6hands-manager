@@ -977,3 +977,35 @@
   color: #ff4d4f;
   line-height: 1.5;
 }
+
+/* 刷新按钮 */
+.refresh-btn-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 16rpx 0;
+}
+
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  padding: 12rpx 32rpx;
+  background: linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%);
+  border: 1rpx solid rgba(102, 126, 234, 0.15);
+  border-radius: 32rpx;
+  font-size: 24rpx;
+  color: #667eea;
+  box-shadow: 0 2rpx 12rpx rgba(102, 126, 234, 0.1);
+}
+
+.refresh-btn::after {
+  border: none;
+}
+
+.refresh-icon {
+  font-size: 28rpx;
+  margin-right: 8rpx;
+}
+
+.refresh-text {
+  font-weight: 500;
+}

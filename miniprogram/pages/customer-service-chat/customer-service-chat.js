@@ -104,12 +104,38 @@ Page({
       if (res.result.code === 0) {
         const messages = res.result.data.messages || []
         console.log('[CustomerServiceChat] 获取消息成功，消息数量:', messages.length)
+        
+        // 处理图片消息，获取云存储文件的临时链接
+        const imageMessages = messages.filter(msg => msg.msg_type === 'image' && msg.cloud_file_id)
+        if (imageMessages.length > 0) {
+          try {
+            const fileIDs = imageMessages.map(msg => msg.cloud_file_id)
+            const tempURLRes = await app.globalData.cloud.getTempFileURL({
+              fileList: fileIDs
+            })
+            console.log('[CustomerServiceChat] 获取图片临时链接:', tempURLRes)
+            
+            if (tempURLRes.fileList) {
+              tempURLRes.fileList.forEach(file => {
+                const msg = messages.find(m => m.cloud_file_id === file.fileID)
+                if (msg && file.status === 0 && file.tempFileURL) {
+                  msg.image_url = file.tempFileURL
+                }
+              })
+            }
+          } catch (err) {
+            console.error('[CustomerServiceChat] 获取图片临时链接失败:', err)
+          }
+        }
+        
         // 打印每条消息的 type 字段并格式化时间
         messages.forEach((msg, index) => {
           console.log(`[CustomerServiceChat] 消息 ${index + 1}:`, {
             type: msg.type,
             msg_type: msg.msg_type,
             content: msg.content ? msg.content.substring(0, 50) : '',
+            cloud_file_id: msg.cloud_file_id,
+            image_url: msg.image_url,
             created_at: msg.created_at
           })
           // 添加格式化后的时间字段
@@ -199,9 +225,6 @@ Page({
         })
 
         this.setData({ messages })
-
-        // 重新获取最新消息列表以同步服务器状态
-        await this.getMessages()
       } else {
         // 发送失败，移除临时消息
         const messages = this.data.messages.filter(msg => !msg.sending)
@@ -254,9 +277,12 @@ Page({
     this.setData({ showActionSheet: false })
 
     const content = `点击下方套餐购买元宝：
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=1">入门套餐 ¥1 (1万元宝)</a>
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=2">标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 15 万元宝)</a>`
+          
+    <a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=1" >入门套餐 ¥1 (1万元宝)</a>
+    
+    <a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=2">标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>
+    
+    <a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 20 万元宝)</a>`
 
     const now = new Date().toISOString()
     const tempMessage = {
@@ -303,7 +329,6 @@ Page({
         })
 
         this.setData({ messages })
-        await this.getMessages()
       } else {
         const messages = this.data.messages.filter(msg => !msg.sending)
         this.setData({ messages })
@@ -367,10 +392,10 @@ Page({
       console.log('[Chat] 图片上传成功:', uploadRes)
 
       const fileID = uploadRes.fileID
+      console.log('[Chat] 图片上传成功，fileID:', fileID)
 
-      // 获取图片的 media_id（这里需要调用临时素材接口）
-      // 暂时使用临时图片链接，实际使用时需要转换为 media_id
-      // 发送消息
+      // 发送消息，将云存储的 fileID 传给云函数
+      // 云函数会负责将 fileID 转换为微信临时素材的 media_id
       const token = app.getToken()
 
       const res = await app.globalData.cloud.callFunction({
@@ -380,9 +405,7 @@ Page({
           msgtype: 'image',
           token: token,
           msgData: {
-            // 注意：客服消息的图片需要 media_id，这里使用临时方案
-            // 实际项目中应该先将图片上传到微信临时素材获取 media_id
-            media_id: fileID // 临时使用 fileID，需要后续完善
+            file_id: fileID  // 传递云存储的 fileID，云函数会自动转换
           }
         }
       })
@@ -398,9 +421,6 @@ Page({
 
         this.setData({ messages })
         wx.hideLoading()
-
-        // 重新获取最新消息列表以同步服务器状态
-        await this.getMessages()
       } else {
         // 发送失败，移除临时消息
         const messages = this.data.messages.filter(msg => !msg.sending)
@@ -818,6 +838,17 @@ Page({
           icon: 'success'
         })
       }
+    })
+  },
+
+  // 预览图片（全屏查看）
+  previewImage(e) {
+    const url = e.currentTarget.dataset.url
+    if (!url) return
+    
+    wx.previewImage({
+      current: url,
+      urls: [url]
     })
   },
 

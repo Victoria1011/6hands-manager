@@ -263,6 +263,8 @@ Page({
       return { field: 'date', order: 'desc' }
     } else if (collection === 'users') {
       return { field: 'created_at', order: 'desc' }
+    } else if (collection === 'tts_clone_design_logs') {
+      return { field: 'updated_at', order: 'desc' }
     } else {
       // 默认按 _id 降序
       return { field: '_id', order: 'desc' }

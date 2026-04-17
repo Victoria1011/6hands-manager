@@ -188,24 +188,22 @@ exports.main = async (event, context) => {
         let sendContent = ''
         if (PagePath && PagePath.endsWith('product1')) {
           sendContent = `购买入门套餐：
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=1">点我购买: 
-入门套餐 ¥1 (1万元宝)</a>`
+          <a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=1" >点我购买：入门套餐 ¥1 (1万元宝)</a>`
         } else if (PagePath && PagePath.endsWith('product2')) {
           sendContent = `购买标准套餐：
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=2">点我购买:
-标准套餐 ¥10 (10万元宝 + 赠送1万元宝)</a>`
+          <a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=2">点我购买：标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>`
         } else if (PagePath && PagePath.endsWith('product3')) {
           sendContent = `购买畅享套餐：
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">点我购买:
-畅享套餐 ¥100 (100万元宝 + 赠送15万元宝)</a>`
+          <a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=3">点我购买：畅享套餐 ¥100 (100万元宝 + 赠送 20 万元宝)</a>`
         } else {
           // 默认显示所有套餐
           sendContent = `点击下方套餐购买元宝：
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=1">入门套餐 ¥1 (1万元宝)</a>
+          
+<a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=1" >入门套餐 ¥1 (1万元宝)</a>
 
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=2">标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>
+<a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=2">标准套餐 ¥10 (10万元宝 + 赠送 1 万元宝)</a>
 
-<a href="http://www.qq.com" data-miniprogram-appid="wx126d0f048410f694" data-miniprogram-path="pages/purchase/purchase?productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 20 万元宝)</a>`
+<a href="weixin://dl/business/?appid=wx126d0f048410f694&path=pages/purchase/purchase&query=productId=3">畅享套餐 ¥100 (100万元宝 + 赠送 20 万元宝)</a>`
         }
 
         console.log('[CustomerServiceCallback] sendContent:', sendContent)

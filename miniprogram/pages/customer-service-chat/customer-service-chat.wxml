@@ -158,43 +158,111 @@
       scroll-y
     >
       <view class="logs-container">
+        <!-- 日志列表标题 -->
+        <view class="section-header">
+          <text class="section-title">日志列表 (共 {{flatLogsList.length}} 条)</text>
+        </view>
+        
+        <!-- logs 类型筛选 tabs -->
+        <view class="log-filter-tabs">
+          <view 
+            class="log-filter-tab {{logFilterType === item.key ? 'active' : ''}}" 
+            wx:for="{{logFilterTabs}}" 
+            wx:key="key"
+            bindtap="onLogFilterChange"
+            data-type="{{item.key}}">
+            {{item.label}}
+          </view>
+        </view>
+
         <view wx:if="{{logsLoading}}" class="loading">
           <text>加载中...</text>
         </view>
-        <view wx:elif="{{logs.length === 0 && !logsLoading}}" class="empty">
+        <view wx:elif="{{flatLogsList.length === 0 && !logsLoading}}" class="empty">
           <text class="empty-text">暂无日志</text>
         </view>
         <view wx:else class="logs-list">
-          <view wx:for="{{logs}}" wx:key="index" class="log-item">
-            <!-- 日志顶部 -->
-            <view class="log-header">
-              <view class="log-title">
-                <text class="log-type">{{item.formattedType}}</text>
-              </view>
-              <text class="log-time">{{item.formattedTime}}</text>
+          <view class="data-item log-flat-item" wx:for="{{flatLogsList}}" wx:key="_logId">
+            <view class="log-flat-header">
+              <text class="log-flat-type log-type-{{item.type}}">{{item.type === 'clone' ? '克隆' : item.type === 'design' ? '设计' : item.type === 'synthesize_mimo' ? 'Mimo合成' : item.type === 'synthesize' ? 'Qwen合成' : item.formattedType || '未知'}}</text>
+              <text class="log-flat-time">{{item.formattedTime}}</text>
             </view>
-
-            <!-- 日志内容 -->
-            <view class="log-body">
-              <view class="log-info-row">
-                <text class="log-label">音色名称</text>
-                <text class="log-value">{{item.voice_name || '-'}}</text>
+            <view class="log-flat-body">
+              <!-- 克隆类型 -->
+              <block wx:if="{{item.type === 'clone'}}">
+                <view class="log-flat-row">
+                  <text class="log-flat-label">声音:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.voice_name}}">{{item.voice_name || '-'}}</text>
+                </view>
+                <view class="log-flat-row">
+                  <text class="log-flat-label">文本:</text>
+                  <text class="log-flat-value text-value copy-text" bindtap="onCopyText" data-text="{{item.text}}">{{item.text || '-'}}</text>
+                </view>
+                <view class="log-flat-row" wx:if="{{item.target_model}}">
+                  <text class="log-flat-label">模型:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.target_model}}">{{item.target_model}}</text>
+                </view>
+              </block>
+              <!-- 设计类型 -->
+              <block wx:if="{{item.type === 'design'}}">
+                <view class="log-flat-row" wx:if="{{item.voice_name}}">
+                  <text class="log-flat-label">声音:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.voice_name}}">{{item.voice_name}}</text>
+                </view>
+                <view class="log-flat-row">
+                  <text class="log-flat-label">文本:</text>
+                  <text class="log-flat-value text-value copy-text" bindtap="onCopyText" data-text="{{item.voice_prompt || item.text}}">{{item.voice_prompt || item.text || '-'}}</text>
+                </view>
+                <view class="log-flat-row" wx:if="{{item.target_model}}">
+                  <text class="log-flat-label">模型:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.target_model}}">{{item.target_model}}</text>
+                </view>
+              </block>
+              <!-- 合成类型 -->
+              <block wx:if="{{item.type === 'synthesize_mimo' || item.type === 'synthesize'}}">
+                <view class="log-flat-row" wx:if="{{item.voice_name}}">
+                  <text class="log-flat-label">声音:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.voice_name}}">{{item.voice_name}}</text>
+                </view>
+                <view class="log-flat-row">
+                  <text class="log-flat-label">文本:</text>
+                  <text class="log-flat-value text-value copy-text" bindtap="onCopyText" data-text="{{item.text}}">{{item.text || '-'}}</text>
+                </view>
+                <view class="log-flat-row" wx:if="{{item.language}}">
+                  <text class="log-flat-label">语言:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.language}}">{{item.language}}</text>
+                </view>
+              </block>
+              <!-- 通用类型（未知类型显示） -->
+              <block wx:if="{{!item.type || (item.type !== 'clone' && item.type !== 'design' && item.type !== 'synthesize_mimo' && item.type !== 'synthesize')}}">
+                <view class="log-flat-row" wx:if="{{item.voice_name}}">
+                  <text class="log-flat-label">声音:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.voice_name}}">{{item.voice_name}}</text>
+                </view>
+                <view class="log-flat-row">
+                  <text class="log-flat-label">文本:</text>
+                  <text class="log-flat-value text-value copy-text" bindtap="onCopyText" data-text="{{item.text || item.voice_prompt || '-'}}">{{item.text || item.voice_prompt || '-'}}</text>
+                </view>
+                <view class="log-flat-row" wx:if="{{item.target_model}}">
+                  <text class="log-flat-label">模型:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.target_model}}">{{item.target_model}}</text>
+                </view>
+                <view class="log-flat-row" wx:if="{{item.language}}">
+                  <text class="log-flat-label">语言:</text>
+                  <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.language}}">{{item.language}}</text>
+                </view>
+              </block>
+              <view class="log-flat-row">
+                <text class="log-flat-label">成本:</text>
+                <text class="log-flat-value cost-value copy-text" bindtap="onCopyText" data-text="{{item.cost}}">{{item.cost || 0}}</text>
               </view>
-              <view class="log-info-row">
-                <text class="log-label">音色ID</text>
-                <text class="log-value log-id">{{item.voice_id || '-'}}</text>
+              <view class="log-flat-row" wx:if="{{item.preview_audio_file_id}}">
+                <text class="log-flat-label">音频:</text>
+                <text class="log-flat-value audio-id-value" bindtap="onPlayAudio" data-audio-id="{{item.preview_audio_file_id}}">▶ 播放并复制链接</text>
               </view>
-              <view class="log-info-row">
-                <text class="log-label">音频ID</text>
-                <text class="log-value log-audio-id">{{item.audio_file_id || '-'}}</text>
-              </view>
-            </view>
-
-            <!-- 底部花费 -->
-            <view class="log-footer">
-              <view class="log-cost">
-                <text class="cost-label">花费元宝</text>
-                <text class="cost-value">{{item.cost || 0}} 💰</text>
+              <view class="log-flat-row" wx:if="{{item.audio_file_id && !item.preview_audio_file_id}}">
+                <text class="log-flat-label">音频:</text>
+                <text class="log-flat-value audio-id-value" bindtap="onPlayAudio" data-audio-id="{{item.audio_file_id}}">▶ 播放并复制链接</text>
               </view>
             </view>
           </view>

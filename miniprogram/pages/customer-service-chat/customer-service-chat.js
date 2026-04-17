@@ -17,9 +17,20 @@ Page({
     },
     blacklistReason: '',
     logs: [],
+    flatLogsList: [], // 扁平化的日志列表
+    allFlatLogsList: [], // 完整原始列表（用于类型筛选）
+    logFilterType: 'all', // all, clone, design, synthesize_mimo, synthesize
+    logFilterTabs: [
+      { key: 'all', label: '全部' },
+      { key: 'clone', label: '克隆' },
+      { key: 'design', label: '设计' },
+      { key: 'synthesize_mimo', label: 'Mimo合成' },
+      { key: 'synthesize', label: 'Qwen合成' }
+    ],
     logsLoading: false,
     orders: [],
-    ordersLoading: false
+    ordersLoading: false,
+    currentPlayingAudioId: null // 当前正在播放的音频ID
   },
 
   onLoad(options) {
@@ -683,7 +694,7 @@ Page({
 
   // 显示日志查询
   async showLogs() {
-    this.setData({ logsLoading: true })
+    this.setData({ logsLoading: true, logFilterType: 'all' })
 
     try {
       const token = app.getToken()
@@ -708,26 +719,59 @@ Page({
       this.setData({ logsLoading: false })
 
       if (res.result.code === 0) {
-        const logs = (res.result.data.logs || []).map(log => ({
+        const logs = res.result.data.logs || []
+        // 扁平化日志列表
+        const flatLogs = logs.map((log, index) => ({
           ...log,
+          openid: this.data.openid,
           formattedTime: this.formatLogTime(log.created_at),
-          formattedType: this.formatLogType(log.type)
-        }))
-        this.setData({ logs })
+          formattedType: this.formatLogType(log.type),
+          _logId: log._id || `${Date.now()}_${index}`
+        })).sort((a, b) => {
+          const timeA = a.created_at ? (typeof a.created_at === 'number' ? a.created_at : new Date(a.created_at).getTime()) : 0
+          const timeB = b.created_at ? (typeof b.created_at === 'number' ? b.created_at : new Date(b.created_at).getTime()) : 0
+          return timeB - timeA
+        })
+        
+        this.setData({ 
+          logs,
+          allFlatLogsList: flatLogs,
+          flatLogsList: flatLogs
+        })
       } else {
+        this.setData({ logs: [], allFlatLogsList: [], flatLogsList: [] })
         wx.showToast({
           title: res.result.message || '查询失败',
           icon: 'none'
         })
       }
     } catch (err) {
-      this.setData({ logsLoading: false })
+      this.setData({ logsLoading: false, logs: [], allFlatLogsList: [], flatLogsList: [] })
       console.error('查询日志失败:', err)
       wx.showToast({
         title: '查询失败',
         icon: 'none'
       })
     }
+  },
+
+  // 日志类型筛选
+  onLogFilterChange(e) {
+    const filterType = e.currentTarget.dataset.type
+    const filteredLogs = this.filterLogsByType(filterType)
+    this.setData({
+      logFilterType: filterType,
+      flatLogsList: filteredLogs
+    })
+  },
+
+  // 根据类型筛选日志
+  filterLogsByType(filterType) {
+    const allLogs = this.data.allFlatLogsList
+    if (filterType === 'all' || !filterType) {
+      return allLogs
+    }
+    return allLogs.filter(log => log.type === filterType)
   },
 
   // 显示订单信息
@@ -878,8 +922,113 @@ Page({
       'text_to_speech': '文字转语音',
       'audio_generation': '音频生成',
       'voice_conversion': '语音转换',
-      'voice_clone': '声音克隆'
+      'voice_clone': '声音克隆',
+      'clone': '克隆',
+      'design': '设计',
+      'synthesize_mimo': 'Mimo合成',
+      'synthesize': 'Qwen合成'
     }
     return typeMap[type] || type || '未知类型'
+  },
+
+  // 复制文本
+  onCopyText(e) {
+    const text = e.currentTarget.dataset.text
+    if (!text) {
+      wx.showToast({ title: '无内容可复制', icon: 'none' })
+      return
+    }
+    wx.setClipboardData({
+      data: String(text),
+      success: () => {
+        wx.showToast({ title: '已复制', icon: 'success' })
+      },
+      fail: () => {
+        wx.showToast({ title: '复制失败', icon: 'none' })
+      }
+    })
+  },
+
+  // 播放音频并复制链接
+  onPlayAudio(e) {
+    const audioFileId = e.currentTarget.dataset.audioId
+    if (!audioFileId) {
+      wx.showToast({ title: '无音频文件', icon: 'none' })
+      return
+    }
+
+    // 如果点击的是同一个音频，则停止播放
+    if (this.data.currentPlayingAudioId === audioFileId) {
+      if (this.innerAudioContext) {
+        this.innerAudioContext.stop()
+        this.innerAudioContext.destroy()
+        this.innerAudioContext = null
+      }
+      this.setData({ currentPlayingAudioId: null })
+      wx.showToast({ title: '已停止', icon: 'none' })
+      return
+    }
+
+    // 停止之前的音频
+    if (this.innerAudioContext) {
+      this.innerAudioContext.stop()
+      this.innerAudioContext.destroy()
+      this.innerAudioContext = null
+    }
+
+    wx.showLoading({ title: '获取音频链接...', mask: true })
+
+    // 获取临时链接
+    app.globalData.cloud.getTempFileURL({
+      fileList: [audioFileId]
+    }).then(res => {
+      wx.hideLoading()
+      console.log('获取音频临时链接:', res)
+
+      if (res.fileList && res.fileList[0] && res.fileList[0].status === 0 && res.fileList[0].tempFileURL) {
+        const tempFileURL = res.fileList[0].tempFileURL
+        console.log('音频临时链接:', tempFileURL)
+
+        // 复制链接到剪贴板
+        wx.setClipboardData({
+          data: tempFileURL,
+          success: () => {
+            wx.showToast({ title: '链接已复制', icon: 'success' })
+          }
+        })
+
+        // 播放音频
+        this.innerAudioContext = wx.createInnerAudioContext()
+        this.innerAudioContext.src = tempFileURL
+        this.innerAudioContext.play()
+
+        this.setData({ currentPlayingAudioId: audioFileId })
+
+        this.innerAudioContext.onPlay(() => {
+          console.log('开始播放音频')
+        })
+
+        this.innerAudioContext.onError((err) => {
+          console.error('音频播放失败:', err)
+          wx.showToast({ title: '播放失败', icon: 'none' })
+          this.setData({ currentPlayingAudioId: null })
+        })
+
+        this.innerAudioContext.onEnded(() => {
+          console.log('音频播放结束')
+          this.setData({ currentPlayingAudioId: null })
+          if (this.innerAudioContext) {
+            this.innerAudioContext.destroy()
+            this.innerAudioContext = null
+          }
+        })
+      } else {
+        wx.showToast({ title: '获取音频链接失败', icon: 'none' })
+      }
+    }).catch(err => {
+      wx.hideLoading()
+      console.error('获取音频临时链接失败:', err)
+      wx.showToast({ title: '获取音频失败', icon: 'none' })
+    })
   }
 })

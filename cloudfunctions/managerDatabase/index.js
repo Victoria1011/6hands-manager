@@ -25,33 +25,66 @@ const ALLOWED_COLLECTIONS = [
   'users'
 ]
 
+// 大数据量集合列表（默认限制100条）
+const LARGE_COLLECTIONS = [
+  'tts_clone_design_logs',
+  'users',
+  'coin_transactions',
+  'upload_file_logs'
+]
+
+// 时间字段映射（不同集合使用不同的时间字段进行筛选）
+const TIME_FIELD_MAP = {
+  'tts_clone_design_logs': 'updated_at',
+  'users': 'created_at',
+  'coin_transactions': 'updated_at',
+  'upload_file_logs': 'date',
+  'api_key_usage': 'updated_at'
+}
+
 /**
  * 查询数据
+ * @param {string} collection - 集合名称
+ * @param {object} where - 查询条件
+ * @param {number} pageIndex - 页码
+ * @param {number} pageSize - 每页条数
+ * @param {object} orderBy - 排序字段
+ * @param {object} timeRange - 时间范围筛选 { startTime, endTime }
  */
-async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderBy = { field: '_id', order: 'desc' }) {
-  console.log('[ManagerDatabase] 查询数据:', collection, '条件:', JSON.stringify(where))
+async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderBy = { field: '_id', order: 'desc' }, timeRange = null) {
+  console.log('[ManagerDatabase] 查询数据:', collection, '条件:', JSON.stringify(where), '时间范围:', JSON.stringify(timeRange))
 
   if (!ALLOWED_COLLECTIONS.includes(collection)) {
     throw new Error(`不允许操作的集合: ${collection}`)
   }
 
-  try {
-    let query = db.collection(collection)
+  // 对于大数据量集合，如果没有时间筛选，默认限制100条
+  const isLargeCollection = LARGE_COLLECTIONS.includes(collection)
+  const effectivePageSize = isLargeCollection && !timeRange ? 100 : pageSize
 
-    // 添加查询条件
+  try {
+    // 构建查询（大数据量集合不传时间筛选，由客户端过滤数组字段的时间）
+    let query = db.collection(collection)
     if (where && Object.keys(where).length > 0) {
       query = query.where(where)
     }
 
-    // 获取总数
-    const countResult = await query.count()
-    const total = countResult.total
+    // 获取总数（对于大数据量集合且有时间筛选时）
+    let total = 0
+    if (isLargeCollection && timeRange) {
+      // 先获取总数（限制最大1000条避免性能问题）
+      const countResult = await query.count()
+      total = Math.min(countResult.total, 1000)
+    } else {
+      // 对于非大数据量集合或无时间筛选，直接使用限制后的条数
+      total = effectivePageSize
+    }
 
     // 分页查询
     const listResult = await query
       .orderBy(orderBy.field, orderBy.order)
-      .skip(pageIndex * pageSize)
-      .limit(pageSize)
+      .skip(pageIndex * effectivePageSize)
+      .limit(effectivePageSize)
       .get()
 
     return {
@@ -61,7 +94,9 @@ async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderB
         list: listResult.data,
         total: total,
         pageIndex: pageIndex,
-        pageSize: pageSize
+        pageSize: effectivePageSize,
+        hasMore: listResult.data.length === effectivePageSize,
+        limited: isLargeCollection && !timeRange
       }
     }
   } catch (err) {
@@ -188,9 +223,12 @@ exports.main = async (event, context) => {
   try {
     let result
 
+    // 提取时间范围参数
+    const timeRange = event.timeRange || null
+
     switch (action) {
       case 'query':
-        result = await queryData(collection, where || {}, pageIndex || 0, pageSize || 20, orderBy)
+        result = await queryData(collection, where || {}, pageIndex || 0, pageSize || 20, orderBy, timeRange)
         break
 
       case 'update':

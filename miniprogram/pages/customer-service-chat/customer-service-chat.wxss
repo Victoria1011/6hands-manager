@@ -997,6 +997,175 @@
   box-shadow: 0 2rpx 12rpx rgba(102, 126, 234, 0.1);
 }
 
+/* 日志列表 section header */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding-bottom: 20rpx;
+  border-bottom: 2rpx solid rgba(102, 126, 234, 0.1);
+}
+
+.section-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333;
+}
+
+/* Logs 类型筛选 tabs */
+.log-filter-tabs {
+  display: flex;
+  gap: 16rpx;
+  margin-bottom: 24rpx;
+  flex-wrap: wrap;
+}
+
+.log-filter-tab {
+  padding: 12rpx 20rpx;
+  background: #f5f5f5;
+  border-radius: 30rpx;
+  font-size: 24rpx;
+  color: #666;
+  transition: all 0.3s;
+  border: 2rpx solid transparent;
+}
+
+.log-filter-tab:active {
+  transform: scale(0.5);
+  opacity: 0.8;
+}
+
+.log-filter-tab.active {
+  background: #e3f2fd;
+  color: #1890ff;
+  border-color: #1890ff;
+  font-weight: 600;
+}
+
+/* 扁平化日志列表样式 */
+.log-flat-item {
+  background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
+  border-color: #e9ecef;
+  margin-bottom: 20rpx;
+}
+
+.log-flat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 2rpx solid #e9ecef;
+}
+
+.log-flat-label {
+  font-size: 24rpx;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.log-flat-value {
+  font-size: 24rpx;
+  color: #333;
+  word-break: break-all;
+}
+
+.log-flat-type {
+  padding: 6rpx 16rpx;
+  border-radius: 20rpx;
+  font-size: 22rpx;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.log-flat-time {
+  font-size: 22rpx;
+  color: #999;
+}
+
+.log-type-clone {
+  background: #ffebee;
+  color: #e53935;
+}
+
+.log-type-design {
+  background: #f3e5f5;
+  color: #8e24aa;
+}
+
+.log-type-synthesize_mimo {
+  background: #e8f5e9;
+  color: #43a047;
+}
+
+.log-type-synthesize {
+  background: #fff3e0;
+  color: #fb8c00;
+}
+
+.log-flat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.log-flat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+}
+
+.log-flat-row .log-flat-label {
+  min-width: 80rpx;
+}
+
+.log-flat-row .text-value {
+  flex: 1;
+  word-break: break-all;
+  color: #666;
+  font-size: 24rpx;
+  line-height: 1.4;
+  background: #f8f9fa;
+  padding: 8rpx 12rpx;
+  border-radius: 6rpx;
+}
+
+.log-flat-row .cost-value {
+  color: #e53935;
+  font-weight: 600;
+}
+
+.log-flat-row .audio-id-value {
+  color: #1890ff;
+  font-family: SFMono-Regular, Consolas, Monaco, monospace;
+  font-size: 22rpx;
+  text-decoration: underline;
+}
+
+.log-flat-row .audio-id-value:active {
+  background: #e3f2fd;
+}
+
+/* 点击复制样式 */
+.copy-text {
+  color: #1890ff;
+  text-decoration: underline;
+}
+
+.copy-text:active {
+  opacity: 0.6;
+}
+
+/* 列表通用样式 */
+.data-item {
+  background: #fafafa;
+  border-radius: 12rpx;
+  padding: 24rpx;
+  border: 2rpx solid #f0f0f0;
+  transition: all 0.3s;
+}
+
 .refresh-btn::after {
   border: none;
 }
@@ -1008,4 +1177,188 @@
 
 .refresh-text {
   font-weight: 500;
+}
+
+/* 日志列表 section header */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding-bottom: 20rpx;
+  border-bottom: 2rpx solid rgba(102, 126, 234, 0.1);
+}
+
+.section-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333;
+}
+
+/* Logs 类型筛选 tabs */
+.log-filter-tabs {
+  display: flex;
+  gap: 16rpx;
+  margin-bottom: 24rpx;
+  flex-wrap: wrap;
+}
+
+
+.log-filter-tab:active {
+  transform: scale(0.95);
+  opacity: 0.8;
+}
+
+.log-filter-tab.active {
+  background: #e3f2fd;
+  color: #1890ff;
+  border-color: #1890ff;
+  font-weight: 600;
+}
+
+/* 扁平化日志列表样式 */
+.log-flat-item {
+  background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
+  border-color: #e9ecef;
+  margin-bottom: 20rpx;
+}
+
+.log-flat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 2rpx solid #e9ecef;
+}
+
+.log-flat-openid {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+.log-flat-label {
+  font-size: 24rpx;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.log-flat-value {
+  font-size: 24rpx;
+  color: #333;
+  word-break: break-all;
+}
+
+.log-flat-type {
+  padding: 6rpx 16rpx;
+  border-radius: 20rpx;
+  font-size: 22rpx;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.log-type-clone {
+  background: #ffebee;
+  color: #e53935;
+}
+
+.log-type-design {
+  background: #f3e5f5;
+  color: #8e24aa;
+}
+
+.log-type-synthesize_mimo {
+  background: #e8f5e9;
+  color: #43a047;
+}
+
+.log-type-synthesize {
+  background: #fff3e0;
+  color: #fb8c00;
+}
+
+.log-flat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.log-flat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+}
+
+.log-flat-row .log-flat-label {
+  min-width: 80rpx;
+}
+
+.log-flat-row .text-value {
+  flex: 1;
+  word-break: break-all;
+  color: #666;
+  font-size: 24rpx;
+  line-height: 1.4;
+  background: #f8f9fa;
+  padding: 8rpx 12rpx;
+  border-radius: 6rpx;
+}
+
+.log-flat-row .cost-value {
+  color: #e53935;
+  font-weight: 600;
+}
+
+.log-flat-row .audio-id-value {
+  color: #1890ff;
+  font-family: SFMono-Regular, Consolas, Monaco, monospace;
+  font-size: 22rpx;
+  text-decoration: underline;
+}
+
+.log-flat-row .audio-id-value:active {
+  background: #e3f2fd;
+}
+
+/* 点击复制样式 */
+.copy-text {
+  color: #1890ff;
+  text-decoration: underline;
+}
+
+.copy-text:active {
+  opacity: 0.6;
+}
+
+/* 列表序号 */
+.item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16rpx;
+}
+
+.item-index {
+  width: 56rpx;
+  min-width: 56rpx;
+  height: 56rpx;
+  background: #1890ff;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.data-item {
+  background: #fafafa;
+  border-radius: 12rpx;
+  padding: 24rpx;
+  border: 2rpx solid #f0f0f0;
+  transition: all 0.3s;
 }

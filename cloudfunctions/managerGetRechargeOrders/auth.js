@@ -11,7 +11,7 @@ const JWT_SECRET = process.env.JWT_SECRET
  */
 function generateToken(payload) {
   return jwt.sign(payload, JWT_SECRET, {
-    expiresIn: '24h' // token 有效期 24 小时
+    expiresIn: '30d' // token 有效期 30 天
   })
 }
 

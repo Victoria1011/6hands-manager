@@ -55,7 +55,14 @@ Page({
       adCount: 0,
       orderCount: 0
     },
-    statsPeriodText: ''
+    statsPeriodText: '',
+    // api_key_usage 编辑相关
+    showApiKeyEditModal: false,
+    apiKeyEditIndex: -1,
+    apiKeyEditUsage: '', // clone_usage 或 design_usage
+    apiKeyEditField: '', // key_num, key_v_num, key_w_num
+    apiKeyEditLabel: '',
+    apiKeyEditValue: 0
   },
 
   onLoad() {
@@ -1234,5 +1241,131 @@ Page({
       return value ? 'true' : 'false'
     }
     return String(value)
+  },
+
+  // 编辑 api_key_usage 字段
+  onEditApiKeyField(e) {
+    const { index, usage, field } = e.currentTarget.dataset
+    const item = this.data.dataList[index]
+    if (!item) return
+
+    const usageData = item[usage] || {}
+    const value = usageData[field] || 0
+
+    // 构建显示标签
+    const usageLabel = usage === 'clone_usage' ? '克隆' : '设计'
+    const fieldLabels = {
+      key_num: 'key_num',
+      key_v_num: 'key_v_num',
+      key_w_num: 'key_w_num'
+    }
+    const label = `${usageLabel}使用 - ${fieldLabels[field]}`
+
+    this.setData({
+      showApiKeyEditModal: true,
+      apiKeyEditIndex: index,
+      apiKeyEditUsage: usage,
+      apiKeyEditField: field,
+      apiKeyEditLabel: label,
+      apiKeyEditValue: value
+    })
+  },
+
+  // api_key_usage 字段输入
+  onApiKeyFieldInput(e) {
+    this.setData({
+      apiKeyEditValue: e.detail.value
+    })
+  },
+
+  // 关闭 api_key_usage 编辑弹窗
+  onCloseApiKeyEditModal() {
+    this.setData({
+      showApiKeyEditModal: false,
+      apiKeyEditIndex: -1,
+      apiKeyEditUsage: '',
+      apiKeyEditField: '',
+      apiKeyEditLabel: '',
+      apiKeyEditValue: 0
+    })
+  },
+
+  // 保存 api_key_usage 字段
+  async onSaveApiKeyField() {
+    const { apiKeyEditIndex, apiKeyEditUsage, apiKeyEditField, apiKeyEditValue } = this.data
+
+    if (apiKeyEditIndex === -1 || !apiKeyEditUsage || !apiKeyEditField) {
+      wx.showToast({ title: '数据错误', icon: 'none' })
+      return
+    }
+
+    const item = this.data.dataList[apiKeyEditIndex]
+    if (!item) return
+
+    const newValue = Number(apiKeyEditValue) || 0
+    const _id = item._id
+
+    wx.showLoading({ title: '保存中...' })
+
+    try {
+      const token = app.getToken()
+
+      // 构建更新数据：直接更新嵌套字段
+      const updatePath = `${apiKeyEditUsage}.${apiKeyEditField}`
+      const updateData = {
+        [updatePath]: newValue
+      }
+
+      const res = await app.globalData.cloud.callFunction({
+        name: 'managerDatabase',
+        data: {
+          token: token,
+          action: 'update',
+          collection: 'api_key_usage',
+          docId: _id,
+          data: updateData
+        }
+      })
+
+      console.log('[DatabaseManage] 更新 api_key_usage 结果:', res.result)
+
+      wx.hideLoading()
+
+      if (res.result.code === 0) {
+        wx.showToast({
+          title: '保存成功',
+          icon: 'success'
+        })
+
+        // 更新本地数据
+        const newDataList = [...this.data.dataList]
+        if (!newDataList[apiKeyEditIndex][apiKeyEditUsage]) {
+          newDataList[apiKeyEditIndex][apiKeyEditUsage] = {}
+        }
+        newDataList[apiKeyEditIndex][apiKeyEditUsage][apiKeyEditField] = newValue
+
+        this.setData({
+          dataList: newDataList,
+          showApiKeyEditModal: false,
+          apiKeyEditIndex: -1,
+          apiKeyEditUsage: '',
+          apiKeyEditField: '',
+          apiKeyEditLabel: '',
+          apiKeyEditValue: 0
+        })
+      } else {
+        wx.showToast({
+          title: res.result.message || '保存失败',
+          icon: 'none'
+        })
+      }
+    } catch (err) {
+      console.error('[DatabaseManage] 保存 api_key_usage 失败:', err)
+      wx.hideLoading()
+      wx.showToast({
+        title: '保存失败，请稍后重试',
+        icon: 'none'
+      })
+    }
   }
 })

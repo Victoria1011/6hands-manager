@@ -461,12 +461,12 @@
 
       <!-- api_key_usage 专用展示 -->
       <view wx:if="{{currentCollection === 'api_key_usage'}}">
-        <view class="data-item apikey-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
+        <view class="data-item apikey-item" wx:for="{{dataList}}" wx:key="_id">
           <view class="item-row">
             <view class="item-index">{{index + 1}}</view>
             <view class="apikey-item-header">
-            <text class="data-id">ID: {{item._id}}</text>
-            <text class="data-action">点击编辑</text>
+              <text class="data-id">ID: {{item._id}}</text>
+            </view>
           </view>
 
           <view class="apikey-item-body">
@@ -476,15 +476,15 @@
               <view class="apikey-stats">
                 <view class="apikey-stat">
                   <text class="apikey-stat-label">key_num:</text>
-                  <text class="apikey-stat-value">{{item.clone_usage.key_num || 0}}</text>
+                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="clone_usage" data-field="key_num">{{item.clone_usage.key_num || 0}}</text>
                 </view>
                 <view class="apikey-stat">
                   <text class="apikey-stat-label">key_v_num:</text>
-                  <text class="apikey-stat-value">{{item.clone_usage.key_v_num || 0}}</text>
+                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="clone_usage" data-field="key_v_num">{{item.clone_usage.key_v_num || 0}}</text>
                 </view>
                 <view class="apikey-stat">
                   <text class="apikey-stat-label">key_w_num:</text>
-                  <text class="apikey-stat-value">{{item.clone_usage.key_w_num || 0}}</text>
+                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="clone_usage" data-field="key_w_num">{{item.clone_usage.key_w_num || 0}}</text>
                 </view>
               </view>
             </view>
@@ -495,15 +495,15 @@
               <view class="apikey-stats">
                 <view class="apikey-stat">
                   <text class="apikey-stat-label">key_num:</text>
-                  <text class="apikey-stat-value">{{item.design_usage.key_num || 0}}</text>
+                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="design_usage" data-field="key_num">{{item.design_usage.key_num || 0}}</text>
                 </view>
                 <view class="apikey-stat">
                   <text class="apikey-stat-label">key_v_num:</text>
-                  <text class="apikey-stat-value">{{item.design_usage.key_v_num || 0}}</text>
+                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="design_usage" data-field="key_v_num">{{item.design_usage.key_v_num || 0}}</text>
                 </view>
                 <view class="apikey-stat">
                   <text class="apikey-stat-label">key_w_num:</text>
-                  <text class="apikey-stat-value">{{item.design_usage.key_w_num || 0}}</text>
+                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="design_usage" data-field="key_w_num">{{item.design_usage.key_w_num || 0}}</text>
                 </view>
               </view>
             </view>
@@ -514,6 +514,32 @@
               <text class="apikey-time-value">{{item.updated_at_formatted}}</text>
             </view>
           </view>
+        </view>
+      </view>
+
+      <!-- api_key_usage 编辑弹窗 -->
+      <view class="modal-mask" wx:if="{{showApiKeyEditModal}}" bindtap="onCloseApiKeyEditModal">
+        <view class="modal-content apikey-edit-modal" catchtap>
+          <view class="modal-header">
+            <text class="modal-title">编辑字段</text>
+            <view class="modal-close" bindtap="onCloseApiKeyEditModal">✕</view>
+          </view>
+
+          <view class="modal-body">
+            <view class="edit-field">
+              <text class="field-label">{{apiKeyEditLabel}}</text>
+              <input
+                class="field-input"
+                type="number"
+                value="{{apiKeyEditValue}}"
+                bindinput="onApiKeyFieldInput"
+              />
+            </view>
+          </view>
+
+          <view class="modal-footer">
+            <button class="btn btn-secondary" bindtap="onCloseApiKeyEditModal">取消</button>
+            <button class="btn btn-primary" bindtap="onSaveApiKeyField">保存</button>
           </view>
         </view>
       </view>

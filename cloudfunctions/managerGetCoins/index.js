@@ -21,7 +21,7 @@ exports.main = async (event, context) => {
     }
   }
 
-  const { openid } = event
+  const { openid, action } = event
 
   if (!openid) {
     return {
@@ -32,7 +32,29 @@ exports.main = async (event, context) => {
   }
 
   try {
-    console.log('[ManagerGetCoins] 查询 openid:', openid)
+    console.log('[ManagerGetCoins] 查询 openid:', openid, 'action:', action)
+
+    // 如果 action 是 transactions，获取元宝明细
+    if (action === 'transactions') {
+      return await getCoinTransactions(openid)
+    }
+
+    // 默认获取元宝余额
+    return await getCoinBalance(openid)
+  } catch (err) {
+    console.error('[ManagerGetCoins] 查询失败:', err)
+    return {
+      code: 500,
+      message: err.message || '查询失败',
+      data: null
+    }
+  }
+}
+
+// 获取元宝余额
+async function getCoinBalance(openid) {
+  try {
+    console.log('[ManagerGetCoins] 查询元宝余额, openid:', openid)
 
     // 查询用户元宝数据
     const result = await db.collection('coins')
@@ -56,8 +78,6 @@ exports.main = async (event, context) => {
     }
 
     const coinData = result.data[0]
-    const balance = coinData.balance || 0
-    const createdAt = coinData.created_at || ''
 
     return {
       code: 0,
@@ -65,7 +85,66 @@ exports.main = async (event, context) => {
       data: coinData
     }
   } catch (err) {
-    console.error('[ManagerGetCoins] 查询失败:', err)
+    console.error('[ManagerGetCoins] 查询元宝余额失败:', err)
+    return {
+      code: 500,
+      message: err.message || '查询失败',
+      data: null
+    }
+  }
+}
+
+// 获取元宝明细
+async function getCoinTransactions(openid) {
+  try {
+    console.log('[ManagerGetCoins] 查询元宝明细, openid:', openid)
+
+    // 查询用户元宝明细数据
+    const result = await db.collection('coin_transactions')
+      .where({
+        openid: openid
+      })
+      .get()
+
+    console.log('[ManagerGetCoins] 查询结果:', result.data.length, '条记录')
+
+    if (result.data.length === 0) {
+      return {
+        code: 0,
+        message: 'success',
+        data: {
+          openid: openid,
+          transactions: []
+        }
+      }
+    }
+
+    // 获取所有交易记录的 transactions 字段
+    const allTransactions = []
+    result.data.forEach(record => {
+      const transactions = record.transactions || []
+      if (Array.isArray(transactions)) {
+        allTransactions.push(...transactions)
+      }
+    })
+
+    // 按时间倒序排序（最新的在前）
+    allTransactions.sort((a, b) => {
+      const timeA = new Date(a.created_at || a.updated_at).getTime()
+      const timeB = new Date(b.created_at || b.updated_at).getTime()
+      return timeB - timeA
+    })
+
+    return {
+      code: 0,
+      message: 'success',
+      data: {
+        openid: openid,
+        transactions: allTransactions
+      }
+    }
+  } catch (err) {
+    console.error('[ManagerGetCoins] 查询元宝明细失败:', err)
     return {
       code: 500,
       message: err.message || '查询失败',

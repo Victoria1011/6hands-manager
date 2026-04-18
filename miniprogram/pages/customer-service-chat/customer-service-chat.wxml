@@ -5,7 +5,7 @@
     <view class="user-info">
       <view class="user-item">
         <text class="user-label">OpenID：</text>
-        <text class="user-value" selectable>{{userInfo.openid || ''}}</text>
+        <text class="user-value copy-text" bindtap="onCopyText" data-text="{{userInfo.openid}}">{{userInfo.openid || ''}}</text>
       </view>
       <view class="user-item">
         <text class="user-label">注册时间：</text>
@@ -47,6 +47,13 @@
         data-tab="orders"
       >
         <text class="tab-text">订单信息</text>
+      </view>
+      <view
+        class="tab-item {{activeTab === 'coins' ? 'active' : ''}}"
+        bindtap="switchTab"
+        data-tab="coins"
+      >
+        <text class="tab-text">元宝明细</text>
       </view>
     </view>
   </view>
@@ -325,6 +332,60 @@
             <!-- 退款时间（如果已退款） -->
             <view class="order-extra" wx:if="{{item.refunded_at}}">
               <text class="extra-label">退款时间：{{item.formattedRefundedTime}}</text>
+            </view>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 元宝明细 Tab -->
+    <scroll-view
+      wx:if="{{activeTab === 'coins'}}"
+      class="tab-scroll"
+      scroll-y
+    >
+      <view class="coins-container">
+        <!-- 总览 -->
+        <view class="coins-summary">
+          <view class="coins-summary-item">
+            <text class="summary-label">当前元宝</text>
+            <text class="summary-value coins-value">{{userInfo.coins || 0}}</text>
+          </view>
+          <view class="coins-summary-item">
+            <text class="summary-label">明细条数</text>
+            <text class="summary-value">{{coinTransactions.length}}</text>
+          </view>
+        </view>
+
+        <view wx:if="{{coinTransactionsLoading}}" class="loading">
+          <text>加载中...</text>
+        </view>
+        <view wx:elif="{{coinTransactions.length === 0 && !coinTransactionsLoading}}" class="empty">
+          <text class="empty-text">暂无元宝明细</text>
+        </view>
+        <view wx:else class="coins-list">
+          <view wx:for="{{coinTransactions}}" wx:key="_id" class="coin-item">
+            <view class="coin-item-header">
+              <text class="coin-type {{item.type}}">{{item.type === 'consume' ? '消耗' : item.type === 'recharge' ? '充值' : item.type === 'gift' ? '赠送' : item.formattedType || '其他'}}</text>
+              <text class="coin-time">{{item.formattedTime}}</text>
+            </view>
+            <view class="coin-item-body">
+              <view class="coin-row">
+                <text class="coin-label">变化：</text>
+                <text class="coin-change {{item.amount >= 0 ? 'positive' : 'negative'}}">{{item.amount >= 0 ? '+' : ''}}{{item.amount}}</text>
+              </view>
+              <view class="coin-row" wx:if="{{item.balance_after !== undefined}}">
+                <text class="coin-label">余额：</text>
+                <text class="coin-balance">{{item.balance_after}}</text>
+              </view>
+              <view class="coin-row" wx:if="{{item.description}}">
+                <text class="coin-label">说明：</text>
+                <text class="coin-desc copy-text" bindtap="onCopyText" data-text="{{item.description}}">{{item.description}}</text>
+              </view>
+              <view class="coin-row" wx:if="{{item.order_no}}">
+                <text class="coin-label">订单：</text>
+                <text class="coin-order copy-text" bindtap="copyOrderNo" data-order-no="{{item.order_no}}">{{item.order_no}}</text>
+              </view>
             </view>
           </view>
         </view>

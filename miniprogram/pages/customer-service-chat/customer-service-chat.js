@@ -30,7 +30,10 @@ Page({
     logsLoading: false,
     orders: [],
     ordersLoading: false,
-    currentPlayingAudioId: null // 当前正在播放的音频ID
+    currentPlayingAudioId: null, // 当前正在播放的音频ID
+    // 元宝明细
+    coinTransactions: [],
+    coinTransactionsLoading: false
   },
 
   onLoad(options) {
@@ -512,6 +515,8 @@ Page({
       this.showLogs()
     } else if (tab === 'orders') {
       this.showOrders()
+    } else if (tab === 'coins') {
+      this.showCoinTransactions()
     }
   },
 
@@ -831,6 +836,88 @@ Page({
         icon: 'none'
       })
     }
+  },
+
+  // 显示元宝明细
+  async showCoinTransactions() {
+    this.setData({ coinTransactionsLoading: true })
+
+    try {
+      const token = app.getToken()
+
+      if (!app.globalData.cloud) {
+        this.setData({ coinTransactionsLoading: false })
+        wx.showToast({
+          title: '云开发未初始化',
+          icon: 'none'
+        })
+        return
+      }
+
+      const res = await app.globalData.cloud.callFunction({
+        name: 'managerGetCoins',
+        data: {
+          openid: this.data.openid,
+          token: token,
+          action: 'transactions'
+        }
+      })
+      console.log('[Chat] 元宝明细查询结果:', res.result)
+
+      this.setData({ coinTransactionsLoading: false })
+
+      if (res.result.code === 0) {
+        const transactions = (res.result.data?.transactions || []).map(item => ({
+          ...item,
+          formattedTime: this.formatCoinTime(item.created_at),
+          formattedType: this.formatCoinTransactionType(item.type)
+        }))
+
+        this.setData({ coinTransactions: transactions })
+      } else {
+        this.setData({ coinTransactions: [] })
+        wx.showToast({
+          title: res.result.message || '查询失败',
+          icon: 'none'
+        })
+      }
+    } catch (err) {
+      this.setData({ coinTransactionsLoading: false, coinTransactions: [] })
+      console.error('[Chat] 查询元宝明细失败:', err)
+      wx.showToast({
+        title: '查询失败',
+        icon: 'none'
+      })
+    }
+  },
+
+  // 格式化元宝明细时间
+  formatCoinTime(timeStr) {
+    if (!timeStr) return ''
+    try {
+      const date = new Date(timeStr)
+      if (isNaN(date.getTime())) return timeStr
+      const year = date.getFullYear()
+      const month = (date.getMonth() + 1).toString().padStart(2, '0')
+      const day = date.getDate().toString().padStart(2, '0')
+      const hours = date.getHours().toString().padStart(2, '0')
+      const minutes = date.getMinutes().toString().padStart(2, '0')
+      return `${year}-${month}-${day} ${hours}:${minutes}`
+    } catch (err) {
+      return timeStr || ''
+    }
+  },
+
+  // 格式化元宝交易类型
+  formatCoinTransactionType(type) {
+    const typeMap = {
+      'consume': '消耗',
+      'recharge': '充值',
+      'gift': '赠送',
+      'refund': '退款',
+      'reward': '奖励'
+    }
+    return typeMap[type] || type
   },
 
   // 格式化订单时间

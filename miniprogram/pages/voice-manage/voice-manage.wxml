@@ -146,7 +146,7 @@
   </view>
 
   <!-- 加载状态 -->
-  <view class="loading-state" wx:if="{{loading}}">
+  <view class="loading-state" wx:if="{{loading && voiceList.length === 0}}">
     <text class="loading-text">加载中...</text>
   </view>
 </view>

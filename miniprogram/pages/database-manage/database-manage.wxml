@@ -359,7 +359,7 @@
             <view class="log-flat-header">
               <view class="log-flat-openid">
                 <text class="log-flat-label">openid:</text>
-                <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.openid}}">{{item.openid}}</text>
+                <text class="log-flat-value link-text" bindtap="goToCustomerService" data-openid="{{item.openid}}">{{item.openid}}</text>
               </view>
               <text class="log-flat-type log-type-{{item.type}}">{{item.type === 'clone' ? '克隆' : item.type === 'design' ? '设计' : item.type === 'synthesize_mimo' ? 'Mimo合成' : item.type === 'synthesize' ? 'Qwen合成' : item.type || '未知'}}</text>
             </view>
@@ -444,7 +444,7 @@
           <view class="upload-item-body">
             <view class="upload-field">
               <text class="upload-label">openid:</text>
-              <text class="upload-value openid-value copy-text" bindtap="onCopyText" data-text="{{item.openid}}">{{item.openid || '-'}}</text>
+              <text class="upload-value openid-value link-text" bindtap="goToCustomerService" data-openid="{{item.openid}}">{{item.openid || '-'}}</text>
             </view>
             <view class="upload-field">
               <text class="upload-label">file_ID:</text>
@@ -566,7 +566,7 @@
             <view class="coin-flat-header">
               <view class="coin-flat-openid">
                 <text class="coin-flat-label">openid:</text>
-                <text class="coin-flat-value copy-text" bindtap="onCopyText" data-text="{{item.openid}}">{{item.openid}}</text>
+                <text class="coin-flat-value link-text" bindtap="goToCustomerService" data-openid="{{item.openid}}">{{item.openid}}</text>
               </view>
               <text class="coin-flat-type coin-type-{{item.type}}">{{item.type === 'spend' ? '消费' : item.type === 'charge' ? '充值' : item.type || '未知'}}</text>
               <text class="coin-flat-amount coin-amount-{{item.type}}">{{item.type === 'spend' ? '-' : '+'}}{{item.amount || 0}}</text>
@@ -603,7 +603,7 @@
           <view class="item-row">
             <view class="item-index">{{index + 1}}</view>
             <view class="user-simple-header">
-              <text class="user-simple-openid copy-text" bindtap="onCopyText" data-text="{{item.openid}}">{{item.openid || '-'}}</text>
+              <text class="user-simple-openid link-text" bindtap="goToCustomerService" data-openid="{{item.openid}}">{{item.openid || '-'}}</text>
               <text class="user-simple-status user-status-{{item.status}}">{{item.status || '-'}}</text>
             </view>
           </view>

@@ -22,7 +22,7 @@ Page({
     loading: false,
     requesting: false, // 正在请求数据的标志
     pageIndex: 0,
-    pageSize: 1000,
+    pageSize: 100,
     total: 0,
     hasMore: true,
     selectedItem: null,
@@ -330,10 +330,10 @@ Page({
           ? flatCoins
           : [...this.data.flatCoinsList, ...flatCoins]
 
-        // 大数据量集合一次性加载所有数据
+        // 大数据量集合使用分页，但初始 pageSize 较小避免超限
         const largeCollections = ['tts_clone_design_logs', 'users', 'coin_transactions', 'upload_file_logs']
-        const isLargeCollection = largeCollections.includes(targetCollection)
-        const hasMore = isLargeCollection ? false : res.result.data.hasMore
+        // 所有集合都走正常分页逻辑，hasMore 由云函数返回决定
+        const hasMore = res.result.data.hasMore
 
         // 第一次加载时设置 total，后续加载保持不变
         const total = this.data.pageIndex === 0 
@@ -1226,6 +1226,18 @@ Page({
       fail: () => {
         wx.showToast({ title: '复制失败', icon: 'none' })
       }
+    })
+  },
+
+  // 跳转到客服聊天页面
+  goToCustomerService(e) {
+    const openid = e.currentTarget.dataset.openid
+    if (!openid) {
+      wx.showToast({ title: 'openid 为空', icon: 'none' })
+      return
+    }
+    wx.navigateTo({
+      url: `/pages/customer-service-chat/customer-service-chat?openid=${openid}`
     })
   },
 

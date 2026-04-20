@@ -209,9 +209,28 @@ page {
 }
 
 .menu-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 20rpx;
+}
+
+.menu-row {
+  display: flex;
+  gap: 20rpx;
+}
+
+/* 非 single 行的子元素各占一半 */
+.menu-row:not(.single) .menu-item {
+  flex: 1;
+}
+
+.menu-row.single {
+  justify-content: center;
+}
+
+.full-width {
+  flex: 1;
+  max-width: 100%;
 }
 
 .menu-item {
@@ -223,6 +242,7 @@ page {
   border: 1rpx solid rgba(102, 126, 234, 0.1);
   border-radius: 20rpx;
   transition: all 0.3s ease;
+  margin-bottom: 20rpx;
   box-shadow: 0 2rpx 12rpx rgba(102, 126, 234, 0.08);
 }
 

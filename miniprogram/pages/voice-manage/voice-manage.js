@@ -4,10 +4,8 @@ const app = getApp()
 Page({
   data: {
     voiceList: [],
-    allVoiceList: [], // 所有账号的音色列表
+    allVoiceList: [], // 所有音色列表（用于账号过滤）
     loading: false,
-    pageIndex: 0,
-    pageSize: 50,
     savedVoiceCount: 0,
     currentType: 'clone', // 当前音色类型：clone(声音克隆) 或 design(声音设计)
     currentAccount: 'all', // 当前账号：all(全部), main(主账号), v(V账号), w(W账号)
@@ -57,15 +55,12 @@ Page({
       filteredList = allVoiceList.filter(voice => voice.account_type === currentAccount)
     }
 
-    // 计算已保存的音色数量
     const savedVoiceCount = filteredList.filter(voice => voice.user_info && voice.user_info.type === 'saved').length
 
     this.setData({
       voiceList: filteredList,
       savedVoiceCount: savedVoiceCount
     })
-
-    console.log('[VoiceManage] 账号过滤完成，当前账号:', currentAccount, '音色数量:', filteredList.length)
   },
 
   // 检查是否已登录
@@ -74,91 +69,59 @@ Page({
     const userInfo = app.getUserInfo()
 
     if (!token || !userInfo) {
-      wx.showToast({
-        title: '请先登录',
-        icon: 'none'
-      })
-      // 跳转回首页
-      setTimeout(() => {
-        wx.reLaunch({
-          url: '/pages/index/index'
-        })
-      }, 1500)
+      wx.showToast({ title: '请先登录', icon: 'none' })
+      setTimeout(() => { wx.reLaunch({ url: '/pages/index/index' }) }, 1500)
       return false
     }
     return true
   },
 
-  // 加载音色列表
+  // 加载音色列表（一次性获取全部）
   async loadVoiceList() {
     if (this.data.loading) return
-
-    this.setData({
-      loading: true
-    })
+    this.setData({ loading: true })
 
     try {
-      // 获取 token
       const token = app.getToken()
       console.log('[VoiceManage] 开始获取音色列表，类型:', this.data.currentType)
-      console.log('[VoiceManage] Token:', token ? '存在' : '不存在')
 
       const res = await app.globalData.cloud.callFunction({
         name: 'managerVoiceManage',
         data: {
           token: token,
           action: 'list',
-          voice_type: this.data.currentType,
-          page_index: this.data.pageIndex,
-          page_size: this.data.pageSize
+          voice_type: this.data.currentType
         }
       })
 
-      console.log('[VoiceManage] 查询结果:', res.result)
-
       if (res.result.code === 0) {
-        const voiceList = res.result.data.voice_list || []
+        const allVoiceList = res.result.data.voice_list || []
         const accountStats = res.result.data.account_stats || { main: 0, v: 0, w: 0 }
+        console.log('[VoiceManage] 获取音色数量:', allVoiceList.length)
 
-        console.log('[VoiceManage] 音色列表详情:', JSON.stringify(voiceList, null, 2))
-        console.log('[VoiceManage] 账号统计:', accountStats)
-
-        // 保存完整的音色列表
-        const allVoiceList = voiceList
-
-        // 根据当前选择的账号过滤
-        let filteredList = []
-        if (this.data.currentAccount === 'all') {
-          filteredList = allVoiceList
-        } else {
+        // 根据当前账号过滤
+        let filteredList = allVoiceList
+        if (this.data.currentAccount !== 'all') {
           filteredList = allVoiceList.filter(voice => voice.account_type === this.data.currentAccount)
         }
 
-        // 计算已保存的音色数量（type === 'saved'）
         const savedVoiceCount = filteredList.filter(voice => voice.user_info && voice.user_info.type === 'saved').length
 
         this.setData({
           allVoiceList: allVoiceList,
           voiceList: filteredList,
           savedVoiceCount: savedVoiceCount,
-          accountStats: accountStats
+          accountStats: accountStats,
+          loading: false
         })
       } else {
-        wx.showToast({
-          title: res.result.message || '查询失败',
-          icon: 'none'
-        })
+        wx.showToast({ title: res.result.message || '查询失败', icon: 'none' })
+        this.setData({ loading: false })
       }
     } catch (err) {
       console.error('[VoiceManage] 查询失败:', err)
-      wx.showToast({
-        title: '查询失败，请稍后重试',
-        icon: 'none'
-      })
-    } finally {
-      this.setData({
-        loading: false
-      })
+      wx.showToast({ title: '查询失败，请稍后重试', icon: 'none' })
+      this.setData({ loading: false })
     }
   },
 
@@ -167,22 +130,19 @@ Page({
     const type = e.currentTarget.dataset.type
     if (type === this.data.currentType) return
 
-    console.log('[VoiceManage] 切换音色类型:', type)
     this.setData({
       currentType: type,
       voiceList: [],
       allVoiceList: [],
-      savedVoiceCount: 0,
-      pageIndex: 0 // 重置页码
+      savedVoiceCount: 0
+    }, () => {
+      this.loadVoiceList()
     })
-
-    // 重新加载音色列表
-    this.loadVoiceList()
   },
 
   // 刷新列表
   onRefresh() {
-    console.log('[VoiceManage] 刷新列表')
+    this.setData({ voiceList: [], allVoiceList: [], savedVoiceCount: 0 })
     this.loadVoiceList()
   },
 

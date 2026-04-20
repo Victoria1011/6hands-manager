@@ -28,15 +28,16 @@
 
     <!-- 功能菜单 -->
     <view class="menu-section">
-      <view class="menu-grid">
-        <view class="menu-item" bindtap="onCustomerService">
+      <!-- 第一行：客服消息 - 独占整行 -->
+      <view class="menu-row single">
+        <view class="menu-item full-width" bindtap="onCustomerService">
           <view class="menu-icon">💬</view>
           <text class="menu-text">客服消息</text>
         </view>
-        <view class="menu-item" bindtap="onRefund">
-          <view class="menu-icon">💰</view>
-          <text class="menu-text">退款处理</text>
-        </view>
+      </view>
+
+      <!-- 第二行：音色管理 + 数据统计 -->
+      <view class="menu-row">
         <view class="menu-item" bindtap="onVoiceManage">
           <view class="menu-icon">🎙️</view>
           <text class="menu-text">音色管理</text>
@@ -44,6 +45,14 @@
         <view class="menu-item" bindtap="onDatabase">
           <view class="menu-icon">🗄️</view>
           <text class="menu-text">数据统计</text>
+        </view>
+      </view>
+
+      <!-- 第三行：退款处理 + 发票开具 -->
+      <view class="menu-row">
+        <view class="menu-item" bindtap="onRefund">
+          <view class="menu-icon">💰</view>
+          <text class="menu-text">退款处理</text>
         </view>
         <view class="menu-item" bindtap="onInvoice">
           <view class="menu-icon">📄</view>

@@ -13,6 +13,15 @@
   opacity: 0.6;
 }
 
+/* 跳转链接样式 */
+.link-text {
+  color: #667eea;
+  text-decoration: underline;
+}
+.link-text:active {
+  opacity: 0.6;
+}
+
 /* 列表序号 */
 .item-index {
   width: 56rpx;

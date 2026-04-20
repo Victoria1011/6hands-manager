@@ -87,59 +87,67 @@ function sendPostRequest(url, data, accountType = 'main') {
 }
 
 /**
- * 查询单个账号的音色列表
+ * 查询单个账号的全部音色列表（自动循环分页获取所有数据）
  * @param {String} accountType - 账号类型：main, v, w
  * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)
- * @param {Number} pageIndex - 页码索引，默认 0
- * @param {Number} pageSize - 每页数量，默认 10
- * @returns {Promise<Object>} 音色列表
+ * @returns {Promise<Array>} 全部音色列表
  */
-async function listVoicesForAccount(accountType, voiceType = 'clone', pageIndex = 0, pageSize = 10) {
-  console.log('[VoiceManage] 查询音色列表，account:', accountType, 'voice_type:', voiceType, 'page_index:', pageIndex, 'page_size:', pageSize)
+async function listVoicesForAccount(accountType, voiceType = 'clone') {
+  console.log('[VoiceManage] 查询全部音色列表，account:', accountType, 'voice_type:', voiceType)
 
   // 根据音色类型选择 model
   const model = voiceType === 'design' ? 'qwen-voice-design' : 'qwen-voice-enrollment'
 
-  const payload = {
-    model: model,
-    input: {
-      action: 'list',
-      page_index: pageIndex,
-      page_size: pageSize
-    }
-  }
+  const pageSize = 100 // 每次请求最多 100 条，减少请求次数
+  let allVoices = []
+  let pageIndex = 0
 
   try {
-    // 调用阿里云 API 查询音色列表
-    const response = await sendPostRequest(DASHSCOPE_API_URL, payload, accountType)
-    const voiceList = response.output?.voice_list || []
+    while (true) {
+      const payload = {
+        model: model,
+        input: {
+          action: 'list',
+          page_index: pageIndex,
+          page_size: pageSize
+        }
+      }
 
-    console.log('[VoiceManage] 账号', accountType, '获取到音色列表，数量:', voiceList.length, '类型:', voiceType)
+      const response = await sendPostRequest(DASHSCOPE_API_URL, payload, accountType)
+      const voiceList = response.output?.voice_list || []
+      console.log('[VoiceManage] 账号', accountType, '第', pageIndex + 1, '页，本页数量:', voiceList.length)
 
-    return voiceList
+      if (voiceList.length === 0) break // 没有更多数据了
+
+      allVoices = allVoices.concat(voiceList)
+
+      if (voiceList.length < pageSize) break // 本页不足一页，说明已到末尾
+      pageIndex++
+    }
+
+    console.log('[VoiceManage] 账号', accountType, '获取完毕，总数量:', allVoices.length)
+    return allVoices
   } catch (err) {
     console.error('[VoiceManage] 账号', accountType, '查询音色列表失败:', err)
-    // 返回空数组，不影响其他账号
-    return []
+    // 返回已获取的部分数据，不影响其他账号
+    return allVoices
   }
 }
 
 /**
  * 查询所有账号的音色列表
  * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)，默认 clone
- * @param {Number} pageIndex - 页码索引，默认 0
- * @param {Number} pageSize - 每页数量，默认 10
  * @returns {Promise<Object>} 音色列表
  */
-async function listVoices(voiceType = 'clone', pageIndex = 0, pageSize = 10) {
+async function listVoices(voiceType = 'clone') {
   console.log('[VoiceManage] 查询所有账号音色列表，voice_type:', voiceType)
 
   try {
-    // 并发查询3个账号的音色列表
+    // 并发查询3个账号的全部音色列表（每个账号内部自动循环分页）
     const [mainList, vList, wList] = await Promise.all([
-      listVoicesForAccount('main', voiceType, pageIndex, pageSize),
-      listVoicesForAccount('v', voiceType, pageIndex, pageSize),
-      listVoicesForAccount('w', voiceType, pageIndex, pageSize)
+      listVoicesForAccount('main', voiceType),
+      listVoicesForAccount('v', voiceType),
+      listVoicesForAccount('w', voiceType)
     ])
 
     // 合并所有账号的音色列表，并标记账号类型
@@ -328,7 +336,7 @@ exports.main = async (event, context) => {
     }
   }
 
-  const { action, voice, creator_openid, voice_type = 'clone', page_index = 0, page_size = 10, account_type = 'main' } = event
+  const { action, voice, creator_openid, voice_type = 'clone', account_type = 'main' } = event
 
   // 验证至少有一个 API Key 配置
   const hasValidKey = Object.values(DASHSCOPE_API_KEYS).some(key => key)
@@ -346,8 +354,8 @@ exports.main = async (event, context) => {
 
     switch (action) {
       case 'list':
-        // 查询音色列表
-        result = await listVoices(voice_type, page_index, page_size)
+        // 查询音色列表（获取全部数据）
+        result = await listVoices(voice_type)
         break
 
       case 'delete':

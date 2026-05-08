@@ -1063,34 +1063,32 @@ Page({
       let adCount = 0
       let orderCount = 0
 
-      dataList.forEach(item => {
-        if (item.transactions && Array.isArray(item.transactions)) {
-          item.transactions.forEach(trans => {
-            const transTime = trans.created_at
-            const transType = trans.type || ''
-            const source = trans.source || ''
+      // 使用扁平化列表统计，避免因分页导致嵌套结构中部分文档未被加载而漏算
+      const flatCoins = this.data.allFlatCoinsList || []
+      flatCoins.forEach(trans => {
+        const transTime = trans.created_at
+        const transType = trans.type || ''
+        const source = trans.source || ''
 
-            let inTimeRange = false
-            if (transTime) {
-              const transTimestamp = typeof transTime === 'number' ? transTime : new Date(transTime).getTime()
-              inTimeRange = transTimestamp >= startTime && transTimestamp <= endTime
-            }
+        let inTimeRange = false
+        if (transTime) {
+          const transTimestamp = typeof transTime === 'number' ? transTime : new Date(transTime).getTime()
+          inTimeRange = transTimestamp >= startTime && transTimestamp <= endTime
+        }
 
-            if (inTimeRange) {
-              // earn 类型：签到、看视频广告
-              if (transType === 'earn') {
-                if (source === 'checkin') {
-                  signCount++
-                } else if (source === 'video_ad') {
-                  adCount++
-                }
-              }
-              // recharge 类型：充值购买
-              else if (transType === 'recharge' && source === 'recharge') {
-                orderCount++
-              }
+        if (inTimeRange) {
+          // earn 类型：签到、看视频广告
+          if (transType === 'earn') {
+            if (source === 'checkin') {
+              signCount++
+            } else if (source === 'video_ad') {
+              adCount++
             }
-          })
+          }
+          // recharge 类型：充值购买
+          else if (transType === 'recharge' && source === 'recharge') {
+            orderCount++
+          }
         }
       })
 

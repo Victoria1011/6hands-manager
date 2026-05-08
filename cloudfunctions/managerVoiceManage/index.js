@@ -168,6 +168,9 @@ async function listVoices(voiceType = 'clone') {
     // 构建音色到用户信息的映射：voice_id -> {openid, voice_name, type: 'saved'|'creator'}
     const voiceUserMap = {}
 
+    // 构建音色最近使用时间映射：voice_id -> 最近使用时间戳
+    const voiceLastUsedTimeMap = {}
+
     savedRecords.forEach(record => {
       const openid = record.openid
       const savedList = record.list || []
@@ -188,20 +191,94 @@ async function listVoices(voiceType = 'clone') {
       })
     })
 
+    // 从 tts_clone_design_logs 日志表补充查询未匹配音色的创建者信息 + 最近使用时间
+    console.log('[VoiceManage] 开始从日志表补充查询创建者信息和最近使用时间')
+    const allVoiceIds = allVoiceList.map(v => v.voice)
+    const unmatchedIds = allVoiceIds.filter(vid => !voiceUserMap[vid])
+    console.log('[VoiceManage] 未匹配的音色数量:', unmatchedIds.length)
+
+    if (unmatchedIds.length > 0 || allVoiceIds.length > 0) {
+      // 分页查询 tts_clone_design_logs 集合
+      const MAX_LIMIT = 20 // 云数据库单次最多 20 条
+      let hasMoreLogs = true
+      let logOffset = 0
+
+      while (hasMoreLogs) {
+        try {
+          const logResult = await db.collection('tts_clone_design_logs')
+            .skip(logOffset)
+            .limit(MAX_LIMIT)
+            .get()
+          const logRecords = logResult.data || []
+
+          if (logRecords.length === 0) break
+
+          logRecords.forEach(doc => {
+            const docOpenid = doc._id // 文档 ID 就是 openid
+            const logs = doc.logs || []
+
+            logs.forEach(log => {
+              const logVoiceId = log.voice_id
+
+              // 处理未匹配音色的创建者信息
+              if (logVoiceId && !voiceUserMap[logVoiceId] && unmatchedIds.includes(logVoiceId)) {
+                voiceUserMap[logVoiceId] = {
+                  openid: docOpenid,
+                  voice_name: log.voice_name || '',
+                  type: 'creator' // 日志中都是创建者
+                }
+              }
+
+              // 记录每个音色的最近使用时间（仅统计 synthesize 类型，即实际使用该音色进行语音合成的记录）
+              if (logVoiceId && allVoiceIds.includes(logVoiceId)) {
+                const logType = log.type
+                if (logType === 'synthesize' || logType === 'synthesize_mimo') {
+                  // 日志表中时间字段为 created_at
+                  const logTime = log.created_at
+                  if (logTime) {
+                    const currentBest = voiceLastUsedTimeMap[logVoiceId]
+                    // 统一转为时间戳比较
+                    const logTimestamp = typeof logTime === 'number' ? logTime : new Date(logTime).getTime()
+                    const currentTimestamp = typeof currentBest === 'number' ? currentBest : (currentBest ? new Date(currentBest).getTime() : 0)
+                    if (!currentBest || logTimestamp > currentTimestamp) {
+                      voiceLastUsedTimeMap[logVoiceId] = logTime
+                    }
+                  }
+                }
+              }
+            })
+          })
+
+          if (logRecords.length < MAX_LIMIT) {
+            hasMoreLogs = false
+          } else {
+            logOffset += MAX_LIMIT
+          }
+        } catch (logErr) {
+          console.error('[VoiceManage] 查询日志表失败:', logErr)
+          hasMoreLogs = false
+        }
+      }
+
+      console.log('[VoiceManage] 日志表补充匹配完成，已记录最近使用时间的音色数量:', Object.keys(voiceLastUsedTimeMap).length)
+    }
+
     //console.log('[VoiceManage] 音色用户映射:', JSON.stringify(voiceUserMap))
     //console.log('[VoiceManage] 音色列表示例:', JSON.stringify(voiceList.slice(0, 2)))
 
-    // 为每个音色添加用户信息
+    // 为每个音色添加用户信息和最近使用时间
     const enhancedVoiceList = allVoiceList.map(voice => {
       const voiceId = voice.voice
       const userInfo = voiceUserMap[voiceId] || null
+      const lastUsedTime = voiceLastUsedTimeMap[voiceId] || null
 
-      console.log('[VoiceManage] 音色:', voiceId, '账号:', voice.account_type, '用户信息:', userInfo ? `${userInfo.openid} (${userInfo.type})` : '无')
+      console.log('[VoiceManage] 音色:', voiceId, '账号:', voice.account_type, '用户信息:', userInfo ? `${userInfo.openid} (${userInfo.type})` : '无', '最近使用时间:', lastUsedTime || '无')
 
       return {
         ...voice,
         voice_type: voiceType, // 添加音色类型
-        user_info: userInfo // 用户信息 {openid, voice_name, type: 'saved'|'creator'}，无则为 null
+        user_info: userInfo, // 用户信息 {openid, voice_name, type: 'saved'|'creator'}，无则为 null
+        last_used_time: lastUsedTime // 最近使用该音色进行语音合成的时间，无则为 null
       }
     })
 
@@ -307,6 +384,35 @@ async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountTyp
     } catch (dbErr) {
       console.error('[VoiceManage] 更新日志表失败:', dbErr)
       // 日志表更新失败不影响删除操作的成功状态
+    }
+
+    // 删除成功后，从 user_saved_voices 中移除该音色
+    console.log('[VoiceManage] 开始清理 user_saved_voices 中的音色记录')
+
+    try {
+      const savedVoicesResult = await db.collection('user_saved_voices').get()
+      const savedRecords = savedVoicesResult.data || []
+
+      for (const record of savedRecords) {
+        const savedList = record.list || []
+        // 过滤掉匹配的音色（voice_id 或 voice 字段）
+        const filteredList = savedList.filter(sv => {
+          const svId = sv.voice_id || sv.voice
+          return svId !== voice
+        })
+
+        if (filteredList.length < savedList.length) {
+          console.log('[VoiceManage] 从 user_saved_voices 中移除音色, openid:', record.openid)
+          await db.collection('user_saved_voices').doc(record._id).update({
+            data: { list: filteredList }
+          })
+        }
+      }
+
+      console.log('[VoiceManage] user_saved_voices 清理完成')
+    } catch (savedErr) {
+      console.error('[VoiceManage] 清理 user_saved_voices 失败:', savedErr)
+      // 不影响删除操作的成功状态
     }
 
     return {

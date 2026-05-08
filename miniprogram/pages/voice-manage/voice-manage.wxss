@@ -339,6 +339,11 @@
   padding-top: 20rpx;
 }
 
+.voice-last-used {
+  border-top: none;
+  padding-top: 10rpx;
+}
+
 .voice-time {
   font-size: 24rpx;
   color: #999;

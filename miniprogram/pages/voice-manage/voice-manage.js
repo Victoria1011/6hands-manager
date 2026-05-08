@@ -76,6 +76,36 @@ Page({
     return true
   },
 
+  // 格式化时间（兼容 iOS）
+  formatTime(time) {
+    if (!time) return ''
+    let timestamp = time
+
+    // 字符串转时间戳：兼容 "2026-03-31 15:42:18"（空格分隔）和 ISO 格式
+    if (typeof time === 'string') {
+      // 将空格替换为 T，使 iOS Safari 兼容
+      const normalized = time.replace(' ', 'T')
+      const parsed = Date.parse(normalized)
+      if (!isNaN(parsed)) {
+        timestamp = parsed
+      } else {
+        return time // 解析失败则原样返回
+      }
+    }
+
+    const date = new Date(timestamp)
+    if (isNaN(date.getTime())) return String(time)
+
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const hours = String(date.getHours()).padStart(2, '0')
+    const minutes = String(date.getMinutes()).padStart(2, '0')
+    const seconds = String(date.getSeconds()).padStart(2, '0')
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+  },
+
   // 加载音色列表（一次性获取全部）
   async loadVoiceList() {
     if (this.data.loading) return
@@ -95,7 +125,16 @@ Page({
       })
 
       if (res.result.code === 0) {
-        const allVoiceList = res.result.data.voice_list || []
+        const allVoiceList = (res.result.data.voice_list || []).map(voice => ({
+          ...voice,
+          last_used_time: voice.last_used_time ? this.formatTime(voice.last_used_time) : null
+        }))
+        // 按创建时间由远到近排列（旧的在前）
+        allVoiceList.sort((a, b) => {
+          const timeA = a.gmt_create ? new Date(String(a.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
+          const timeB = b.gmt_create ? new Date(String(b.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
+          return timeA - timeB
+        })
         const accountStats = res.result.data.account_stats || { main: 0, v: 0, w: 0 }
         console.log('[VoiceManage] 获取音色数量:', allVoiceList.length)
 
@@ -160,17 +199,11 @@ Page({
     })
   },
 
-  // 复制 OpenID
-  onCopyOpenid(e) {
+  // 点击 OpenID 跳转到客服聊天页面（日志查询）
+  onTapOpenid(e) {
     const openid = e.currentTarget.dataset.openid
-    wx.setClipboardData({
-      data: openid,
-      success: () => {
-        wx.showToast({
-          title: 'OpenID 已复制',
-          icon: 'success'
-        })
-      }
+    wx.navigateTo({
+      url: `/pages/customer-service-chat/customer-service-chat?openid=${openid}&tab=logs`
     })
   },
 

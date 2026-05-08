@@ -118,12 +118,15 @@
           <text class="account-badge-text">{{accountNames[item.account_type] || item.account_type}}</text>
         </view>
       </view>
+      <view class="voice-footer voice-last-used" wx:if="{{item.last_used_time}}">
+        <text class="voice-time">最近使用: {{item.last_used_time}}</text>
+      </view>
       <view class="voice-users" wx:if="{{item.user_info && !batchMode}}">
         <view class="user-info-row">
           <text class="user-label">{{item.user_info.type === 'saved' ? '保存者' : '创建者'}} OpenID:</text>
-          <view class="user-value user-value-clickable" bindtap="onCopyOpenid" data-openid="{{item.user_info.openid}}">
+          <view class="user-value user-value-clickable" bindtap="onTapOpenid" data-openid="{{item.user_info.openid}}">
             <text>{{item.user_info.openid}}</text>
-            <text class="copy-icon">📋</text>
+            <text class="copy-icon">🔗</text>
           </view>
         </view>
         <view class="user-info-row">

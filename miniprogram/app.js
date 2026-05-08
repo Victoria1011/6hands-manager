@@ -29,14 +29,23 @@ App({
 
         console.log('[App] 云开发初始化成功（跨账号环境共享模式）', this.globalData.cloud);
         
-        // 云开发初始化成功后，自动登录
-        console.log('[App] 开始自动登录');
-        const loginResult = await this.login();
-        
-        if (loginResult.success) {
-          console.log('[App] 自动登录成功');
+        // 优先检查本地是否已有有效 token，避免每次启动都重新登录
+        const cachedToken = wx.getStorageSync('token');
+        const cachedUserInfo = wx.getStorageSync('userInfo');
+
+        if (cachedToken && cachedUserInfo) {
+          console.log('[App] 本地已有 token，直接复用，跳过登录');
+          this.globalData.token = cachedToken;
+          this.globalData.userInfo = cachedUserInfo;
         } else {
-          console.error('[App] 自动登录失败:', loginResult.message);
+          console.log('[App] 本地无 token，开始自动登录');
+          const loginResult = await this.login();
+          
+          if (loginResult.success) {
+            console.log('[App] 自动登录成功');
+          } else {
+            console.error('[App] 自动登录失败:', loginResult.message);
+          }
         }
         
         wx.hideLoading()

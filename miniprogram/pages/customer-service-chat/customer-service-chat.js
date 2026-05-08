@@ -40,7 +40,7 @@ Page({
     // 检查登录状态
     if (!this.checkIsLoggedIn()) return
 
-    const { openid } = options
+    const { openid, tab } = options
     if (!openid) {
       wx.showToast({
         title: '参数错误',
@@ -54,10 +54,22 @@ Page({
 
     this.setData({
       openid,
+      activeTab: tab || 'chat',
       'userInfo.openid': openid
     })
     this.getMessages()
     this.getUserInfo()
+
+    // 如果指定了 tab，自动加载对应数据
+    if (tab === 'logs') {
+      this.showLogs()
+    } else if (tab === 'user') {
+      this.checkBlacklistStatus()
+    } else if (tab === 'orders') {
+      this.showOrders()
+    } else if (tab === 'coins') {
+      this.showCoinTransactions()
+    }
   },
 
   onShow() {

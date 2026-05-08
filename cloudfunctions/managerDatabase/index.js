@@ -33,15 +33,6 @@ const LARGE_COLLECTIONS = [
   'upload_file_logs'
 ]
 
-// 时间字段映射（不同集合使用不同的时间字段进行筛选）
-const TIME_FIELD_MAP = {
-  'tts_clone_design_logs': 'updated_at',
-  'users': 'created_at',
-  'coin_transactions': 'updated_at',
-  'upload_file_logs': 'date',
-  'api_key_usage': 'updated_at'
-}
-
 /**
  * 查询数据
  * @param {string} collection - 集合名称
@@ -58,15 +49,18 @@ async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderB
     throw new Error(`不允许操作的集合: ${collection}`)
   }
 
-  // 对于大数据量集合，如果没有时间筛选，默认限制100条
+  // 对于大数据量集合，如果没有时间筛选，默认限制100条；有时间筛选时限制200条避免超时
   const isLargeCollection = LARGE_COLLECTIONS.includes(collection)
-  const effectivePageSize = isLargeCollection && !timeRange ? 100 : pageSize
+  const effectivePageSize = Math.min(pageSize, isLargeCollection ? (timeRange ? 200 : 100) : 100)
 
   try {
-    // 构建查询（大数据量集合不传时间筛选，由客户端过滤数组字段的时间）
+    // 构建查询条件（统一在查询后做服务端过滤，避免 where 条件格式不兼容）
+    let queryWhere = { ...where }
+
+    // 构建查询
     let query = db.collection(collection)
-    if (where && Object.keys(where).length > 0) {
-      query = query.where(where)
+    if (queryWhere && Object.keys(queryWhere).length > 0) {
+      query = query.where(queryWhere)
     }
 
     // 获取总数（对于大数据量集合且有时间筛选时）
@@ -87,11 +81,50 @@ async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderB
       .limit(effectivePageSize)
       .get()
 
+    // 对大数据量集合做服务端时间过滤，减少返回数据量
+    let resultList = listResult.data
+    if (timeRange && timeRange.startTime !== undefined && timeRange.endTime !== undefined) {
+      const startTimeNum = Number(timeRange.startTime)
+      const endTimeNum = Number(timeRange.endTime)
+
+      // 兼容 created_at 为数字、Date 对象、ISO 字符串等格式
+      const toTimestamp = (val) => {
+        if (!val) return 0
+        return typeof val === 'number' ? val : new Date(val).getTime()
+      }
+
+      if (collection === 'tts_clone_design_logs') {
+        resultList = resultList.map(item => ({
+          ...item,
+          logs: (item.logs || []).filter(log => {
+            const t = toTimestamp(log.created_at)
+            return t >= startTimeNum && t <= endTimeNum
+          })
+        })).filter(item => item.logs.length > 0)
+        console.log(`[ManagerDatabase] logs 服务端过滤后: ${listResult.data.length} -> ${resultList.length} 条文档`)
+      } else if (collection === 'users') {
+        resultList = resultList.filter(item => {
+          const t = toTimestamp(item.created_at)
+          return t >= startTimeNum && t <= endTimeNum
+        })
+        console.log(`[ManagerDatabase] users 服务端过滤后: ${listResult.data.length} -> ${resultList.length} 条`)
+      } else if (collection === 'coin_transactions') {
+        resultList = resultList.map(item => ({
+          ...item,
+          transactions: (item.transactions || []).filter(trans => {
+            const t = toTimestamp(trans.created_at)
+            return t >= startTimeNum && t <= endTimeNum
+          })
+        })).filter(item => item.transactions.length > 0)
+        console.log(`[ManagerDatabase] coins 服务端过滤后: ${listResult.data.length} -> ${resultList.length} 条文档`)
+      }
+    }
+
     return {
       code: 0,
       message: 'success',
       data: {
-        list: listResult.data,
+        list: resultList,
         total: total,
         pageIndex: pageIndex,
         pageSize: effectivePageSize,

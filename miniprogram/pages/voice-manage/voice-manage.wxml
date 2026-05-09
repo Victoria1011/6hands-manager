@@ -30,6 +30,28 @@
       </view>
     </view>
 
+    <!-- 列表标签：全部 / 建议清理 -->
+    <view class="list-tab-bar" wx:if="{{!loading}}">
+      <view
+        class="list-tab {{currentListTab === 'all' ? 'list-tab-active' : ''}}"
+        bindtap="switchListTab"
+        data-tab="all"
+      >
+        全部
+      </view>
+      <view
+        class="list-tab {{currentListTab === 'suggest' ? 'list-tab-active list-tab-suggest-active' : ''}}"
+        bindtap="switchListTab"
+        data-tab="suggest"
+      >
+        建议清理
+        <text class="suggest-badge" wx:if="{{suggestDeleteCount > 0}}">{{suggestDeleteCount}}</text>
+      </view>
+      <button class="suggest-clean-btn" catchtap="onSuggestBatchDelete" wx:if="{{currentListTab === 'suggest' && suggestDeleteCount > 0 && !batchMode}}" size="mini">
+        一键清理
+      </button>
+    </view>
+
     <!-- 账号选项卡 -->
     <view class="account-tabs" wx:if="{{!loading}}">
       <view
@@ -37,28 +59,28 @@
         bindtap="switchAccount"
         data-account="all"
       >
-        全部 ({{voiceList.length}})
+        全部 ({{currentListTab === 'suggest' ? suggestDeleteCount : voiceList.length}})
       </view>
       <view
         class="account-tab {{currentAccount === 'main' ? 'account-tab-active' : ''}}"
         bindtap="switchAccount"
         data-account="main"
       >
-        {{accountNames.main}} ({{accountStats.main}})
+        {{accountNames.main}} ({{currentListTab === 'suggest' ? suggestDeleteStats.main : accountStats.main}})
       </view>
       <view
         class="account-tab {{currentAccount === 'v' ? 'account-tab-active' : ''}}"
         bindtap="switchAccount"
         data-account="v"
       >
-        {{accountNames.v}} ({{accountStats.v}})
+        {{accountNames.v}} ({{currentListTab === 'suggest' ? suggestDeleteStats.v : accountStats.v}})
       </view>
       <view
         class="account-tab {{currentAccount === 'w' ? 'account-tab-active' : ''}}"
         bindtap="switchAccount"
         data-account="w"
       >
-        {{accountNames.w}} ({{accountStats.w}})
+        {{accountNames.w}} ({{currentListTab === 'suggest' ? suggestDeleteStats.w : accountStats.w}})
       </view>
     </view>
 
@@ -78,13 +100,18 @@
   <view class="stats-card">
     <view class="stat-item">
       <text class="stat-value">{{voiceList.length}}</text>
-      <text class="stat-label">{{currentType === 'clone' ? '声音克隆' : '声音设计'}}总数</text>
+      <text class="stat-label">{{currentListTab === 'suggest' ? '建议清理' : (currentType === 'clone' ? '声音克隆' : '声音设计')}}总数</text>
     </view>
     <view class="stat-divider"></view>
     <view class="stat-item">
       <text class="stat-value">{{savedVoiceCount}}</text>
       <text class="stat-label">已保存数</text>
     </view>
+  </view>
+
+  <!-- 建议清理说明 -->
+  <view class="suggest-hint" wx:if="{{currentListTab === 'suggest' && !loading}}">
+    <text class="suggest-hint-text">以下音色未保存且超过20天未使用，建议清理</text>
   </view>
 
   <!-- 音色列表 -->
@@ -136,7 +163,6 @@
         <view class="user-type-badge" wx:if="{{item.user_info.type === 'saved'}}">
           <text class="badge-text">已保存</text>
         </view>
-       
       </view>
     </view>
   </view>
@@ -144,8 +170,8 @@
   <!-- 空状态 -->
   <view class="empty-state" wx:if="{{!loading && voiceList.length === 0}}">
     <view class="empty-icon">🎙️</view>
-    <text class="empty-text">暂无音色</text>
-    <text class="empty-tip">您还没有创建任何音色</text>
+    <text class="empty-text">{{currentListTab === 'suggest' ? '无需清理' : '暂无音色'}}</text>
+    <text class="empty-tip">{{currentListTab === 'suggest' ? '没有未保存且超过20天未使用的音色' : '您还没有创建任何音色'}}</text>
   </view>
 
   <!-- 加载状态 -->

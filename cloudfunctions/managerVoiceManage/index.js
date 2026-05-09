@@ -87,7 +87,7 @@ function sendPostRequest(url, data, accountType = 'main') {
 }
 
 /**
- * 查询单个账号的全部音色列表（自动循环分页获取所有数据）
+ * 查询单个账号的全部音色列表（自动循环分页获取所有数据，支持重试）
  * @param {String} accountType - 账号类型：main, v, w
  * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)
  * @returns {Promise<Array>} 全部音色列表
@@ -99,38 +99,47 @@ async function listVoicesForAccount(accountType, voiceType = 'clone') {
   const model = voiceType === 'design' ? 'qwen-voice-design' : 'qwen-voice-enrollment'
 
   const pageSize = 100 // 每次请求最多 100 条，减少请求次数
-  let allVoices = []
-  let pageIndex = 0
+  const MAX_RETRIES = 2 // 最大重试次数
 
-  try {
-    while (true) {
-      const payload = {
-        model: model,
-        input: {
-          action: 'list',
-          page_index: pageIndex,
-          page_size: pageSize
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let allVoices = []
+    let pageIndex = 0
+
+    try {
+      while (true) {
+        const payload = {
+          model: model,
+          input: {
+            action: 'list',
+            page_index: pageIndex,
+            page_size: pageSize
+          }
         }
+
+        const response = await sendPostRequest(DASHSCOPE_API_URL, payload, accountType)
+        const voiceList = response.output?.voice_list || []
+        console.log('[VoiceManage] 账号', accountType, '第', pageIndex + 1, '页，本页数量:', voiceList.length)
+
+        if (voiceList.length === 0) break // 没有更多数据了
+
+        allVoices = allVoices.concat(voiceList)
+
+        if (voiceList.length < pageSize) break // 本页不足一页，说明已到末尾
+        pageIndex++
       }
 
-      const response = await sendPostRequest(DASHSCOPE_API_URL, payload, accountType)
-      const voiceList = response.output?.voice_list || []
-      console.log('[VoiceManage] 账号', accountType, '第', pageIndex + 1, '页，本页数量:', voiceList.length)
-
-      if (voiceList.length === 0) break // 没有更多数据了
-
-      allVoices = allVoices.concat(voiceList)
-
-      if (voiceList.length < pageSize) break // 本页不足一页，说明已到末尾
-      pageIndex++
+      console.log('[VoiceManage] 账号', accountType, '获取完毕，总数量:', allVoices.length)
+      return allVoices
+    } catch (err) {
+      console.error(`[VoiceManage] 账号 ${accountType} 第 ${attempt + 1}/${MAX_RETRIES + 1} 次查询失败:`, err.message)
+      if (attempt < MAX_RETRIES) {
+        console.log(`[VoiceManage] 账号 ${accountType} 等待 1 秒后重试...`)
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      } else {
+        console.error(`[VoiceManage] 账号 ${accountType} 已重试 ${MAX_RETRIES} 次仍失败，返回已获取的 ${allVoices.length} 条数据`)
+        return allVoices // 返回已获取的部分数据，不影响其他账号
+      }
     }
-
-    console.log('[VoiceManage] 账号', accountType, '获取完毕，总数量:', allVoices.length)
-    return allVoices
-  } catch (err) {
-    console.error('[VoiceManage] 账号', accountType, '查询音色列表失败:', err)
-    // 返回已获取的部分数据，不影响其他账号
-    return allVoices
   }
 }
 
@@ -150,6 +159,11 @@ async function listVoices(voiceType = 'clone') {
       listVoicesForAccount('w', voiceType)
     ])
 
+    console.log('[VoiceManage] ===== 音色数量统计 =====')
+    console.log('[VoiceManage] main 账号:', mainList.length, '个')
+    console.log('[VoiceManage] v 账号:', vList.length, '个')
+    console.log('[VoiceManage] w 账号:', wList.length, '个')
+
     // 合并所有账号的音色列表，并标记账号类型
     const allVoiceList = [
       ...mainList.map(v => ({ ...v, account_type: 'main' })),
@@ -157,7 +171,8 @@ async function listVoices(voiceType = 'clone') {
       ...wList.map(v => ({ ...v, account_type: 'w' }))
     ]
 
-    console.log('[VoiceManage] 所有账号音色列表，数量:', allVoiceList.length)
+    console.log('[VoiceManage] 合并总计:', allVoiceList.length, '个')
+    console.log('[VoiceManage] =========================')
 
     // 查询数据库中所有用户的音色记录（包含创建和保存）
     const savedVoicesResult = await db.collection('user_saved_voices').get()

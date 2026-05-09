@@ -334,7 +334,100 @@ async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountTyp
     throw new Error('音色名称不能为空')
   }
 
-  // 根据音色类型选择 model
+  // 1. 更新 tts_clone_design_logs 表中相关日志，将 voice_id 置为 invalid
+  console.log('[VoiceManage] 开始更新日志表中的音色信息')
+  try {
+    if (creatorOpenid) {
+      const record = await db.collection('tts_clone_design_logs')
+        .doc(creatorOpenid)
+        .get()
+
+      if (record.data && record.data.logs) {
+        const logs = record.data.logs
+        let needUpdate = false
+
+        const updatedLogs = logs.map(log => {
+          if (log.voice_id === voice) {
+            console.log('[VoiceManage] 找到匹配日志, openid:', creatorOpenid)
+            needUpdate = true
+            return {
+              ...log,
+              voice_id: 'invalid',
+              voice_name: 'invalid'
+            }
+          }
+          return log
+        })
+
+        if (needUpdate) {
+          await db.collection('tts_clone_design_logs')
+            .doc(creatorOpenid)
+            .update({
+              data: {
+                logs: updatedLogs
+              }
+            })
+          console.log('[VoiceManage] 日志更新完成')
+        } else {
+          console.log('[VoiceManage] 日志中未找到该音色')
+        }
+      } else {
+        console.log('[VoiceManage] 未找到日志记录')
+      }
+    } else {
+      console.log('[VoiceManage] 未提供 openid，跳过日志更新')
+    }
+  } catch (dbErr) {
+    console.error('[VoiceManage] 更新日志表失败:', dbErr)
+  }
+
+  // 2. 从 user_saved_voices 中移除该音色
+  console.log('[VoiceManage] 开始清理 user_saved_voices 中的音色记录')
+  try {
+    const savedVoicesResult = await db.collection('user_saved_voices').get()
+    const savedRecords = savedVoicesResult.data || []
+
+    for (const record of savedRecords) {
+      const savedList = record.list || []
+      const filteredList = savedList.filter(sv => {
+        const svId = sv.voice_id || sv.voice
+        return svId !== voice
+      })
+
+      if (filteredList.length < savedList.length) {
+        console.log('[VoiceManage] 从 user_saved_voices 中移除音色, openid:', record.openid)
+        await db.collection('user_saved_voices').doc(record._id).update({
+          data: { list: filteredList }
+        })
+      }
+    }
+
+    console.log('[VoiceManage] user_saved_voices 清理完成')
+  } catch (savedErr) {
+    console.error('[VoiceManage] 清理 user_saved_voices 失败:', savedErr)
+  }
+
+  // 3. 检查 speakers 集合中是否存在该音色
+  try {
+    const speakerResult = await db.collection('speakers')
+      .doc('system_speakers')
+      .get()
+    if (speakerResult.data && speakerResult.data.list) {
+      const isInSpeakers = speakerResult.data.list.some(s => s.voice_id === voice)
+      if (isInSpeakers) {
+        console.log('[VoiceManage] 音色在 speakers 中，不允许删除:', voice)
+        return {
+          code: 403,
+          message: '该音色为系统内置音色，不支持删除',
+          data: null
+        }
+      }
+    }
+  } catch (speakerErr) {
+    console.error('[VoiceManage] 查询 speakers 失败:', speakerErr)
+  }
+
+  // 4. 调用阿里云 API 删除音色
   const model = voiceType === 'design' ? 'qwen-voice-design' : 'qwen-voice-enrollment'
 
   const payload = {
@@ -346,89 +439,7 @@ async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountTyp
   }
 
   try {
-    // 先调用阿里云 API 删除音色，使用指定的账号
     const response = await sendPostRequest(DASHSCOPE_API_URL, payload, accountType)
-
-    // 删除成功后，更新 tts_clone_design_logs 表中相关日志
-    console.log('[VoiceManage] 开始更新日志表中的音色信息')
-
-    try {
-      // 如果有创建者 openid，直接查询该用户的日志记录
-      if (creatorOpenid) {
-        const record = await db.collection('tts_clone_design_logs')
-          .doc(creatorOpenid)
-          .get()
-
-        if (record.data && record.data.logs) {
-          const logs = record.data.logs
-          let needUpdate = false
-
-          // 检查 logs 数组中是否有匹配的 voice_id
-          const updatedLogs = logs.map(log => {
-            if (log.voice_id === voice) {
-              console.log('[VoiceManage] 找到匹配日志, openid:', creatorOpenid)
-              needUpdate = true
-              return {
-                ...log,
-                voice_id: 'invalid',
-                voice_name: 'invalid'
-              }
-            }
-            return log
-          })
-
-          // 如果有需要更新的日志，执行更新
-          if (needUpdate) {
-            await db.collection('tts_clone_design_logs')
-              .doc(creatorOpenid)
-              .update({
-                data: {
-                  logs: updatedLogs
-                }
-              })
-            console.log('[VoiceManage] 日志更新完成')
-          } else {
-            console.log('[VoiceManage] 日志中未找到该音色')
-          }
-        } else {
-          console.log('[VoiceManage] 未找到日志记录')
-        }
-      } else {
-        console.log('[VoiceManage] 未提供 openid，跳过日志更新')
-      }
-    } catch (dbErr) {
-      console.error('[VoiceManage] 更新日志表失败:', dbErr)
-      // 日志表更新失败不影响删除操作的成功状态
-    }
-
-    // 删除成功后，从 user_saved_voices 中移除该音色
-    console.log('[VoiceManage] 开始清理 user_saved_voices 中的音色记录')
-
-    try {
-      const savedVoicesResult = await db.collection('user_saved_voices').get()
-      const savedRecords = savedVoicesResult.data || []
-
-      for (const record of savedRecords) {
-        const savedList = record.list || []
-        // 过滤掉匹配的音色（voice_id 或 voice 字段）
-        const filteredList = savedList.filter(sv => {
-          const svId = sv.voice_id || sv.voice
-          return svId !== voice
-        })
-
-        if (filteredList.length < savedList.length) {
-          console.log('[VoiceManage] 从 user_saved_voices 中移除音色, openid:', record.openid)
-          await db.collection('user_saved_voices').doc(record._id).update({
-            data: { list: filteredList }
-          })
-        }
-      }
-
-      console.log('[VoiceManage] user_saved_voices 清理完成')
-    } catch (savedErr) {
-      console.error('[VoiceManage] 清理 user_saved_voices 失败:', savedErr)
-      // 不影响删除操作的成功状态
-    }
 
     return {
       code: 0,

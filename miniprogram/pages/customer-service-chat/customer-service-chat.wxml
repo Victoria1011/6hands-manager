@@ -182,6 +182,18 @@
           </view>
         </view>
 
+        <!-- 二级筛选 tabs（克隆/设计时显示） -->
+        <view class="log-filter-tabs log-sub-filter-tabs" wx:if="{{logFilterType === 'clone' || logFilterType === 'design'}}">
+          <view 
+            class="log-filter-tab log-sub-filter-tab {{logSubFilter === item.key ? 'active' : ''}}" 
+            wx:for="{{logSubFilterTabs}}" 
+            wx:key="key"
+            bindtap="onLogSubFilterChange"
+            data-type="{{item.key}}">
+            {{item.label}}
+          </view>
+        </view>
+
         <view wx:if="{{logsLoading}}" class="loading">
           <text>加载中...</text>
         </view>
@@ -270,6 +282,13 @@
               <view class="log-flat-row" wx:if="{{item.audio_file_id && !item.preview_audio_file_id}}">
                 <text class="log-flat-label">音频:</text>
                 <text class="log-flat-value audio-id-value" bindtap="onPlayAudio" data-audio-id="{{item.audio_file_id}}">▶ 播放并复制链接</text>
+              </view>
+              <!-- 音色状态（克隆/设计类型且有voice_id） -->
+              <view class="log-flat-row" wx:if="{{(item.type === 'clone' || item.type === 'design') && item.voice_id}}">
+                <text class="log-flat-label"></text>
+                <text class="log-flat-value voice-status-published" wx:if="{{item.isPublished}}">✓ 已发布</text>
+                <text class="log-flat-value voice-status-uploaded" wx:elif="{{item.isUploaded}}">✓ 已上传</text>
+                <text class="log-flat-value upload-voice-link" wx:else catchtap="onUploadVoice" data-voice-id="{{item.voice_id}}" data-voice-name="{{item.voice_name}}" data-voice-prompt="{{item.voice_prompt}}" data-used-api-key="{{item.used_api_key}}" data-preview-text="{{item.preview_text}}" data-preview-audio-file-id="{{item.preview_audio_file_id}}" data-language="{{item.language}}" data-target-model="{{item.target_model}}" data-type="{{item.type}}">⬆ 上传到测试音色库</text>
               </view>
             </view>
           </view>

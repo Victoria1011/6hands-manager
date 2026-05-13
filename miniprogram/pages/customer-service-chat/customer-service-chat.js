@@ -20,12 +20,18 @@ Page({
     flatLogsList: [], // 扁平化的日志列表
     allFlatLogsList: [], // 完整原始列表（用于类型筛选）
     logFilterType: 'all', // all, clone, design, synthesize_mimo, synthesize
+    logSubFilter: 'all', // all, qwen, mimo（克隆/设计的二级筛选）
     logFilterTabs: [
       { key: 'all', label: '全部' },
       { key: 'clone', label: '克隆' },
       { key: 'design', label: '设计' },
       { key: 'synthesize_mimo', label: 'Mimo合成' },
       { key: 'synthesize', label: 'Qwen合成' }
+    ],
+    logSubFilterTabs: [
+      { key: 'all', label: '全部' },
+      { key: 'qwen', label: 'Qwen' },
+      { key: 'mimo', label: 'Mimo' }
     ],
     logsLoading: false,
     orders: [],
@@ -711,7 +717,7 @@ Page({
 
   // 显示日志查询
   async showLogs() {
-    this.setData({ logsLoading: true, logFilterType: 'all' })
+    this.setData({ logsLoading: true, logFilterType: 'all', logSubFilter: 'all' })
 
     try {
       const token = app.getToken()
@@ -737,14 +743,53 @@ Page({
 
       if (res.result.code === 0) {
         const logs = res.result.data.logs || []
+
+        // 查询 speakers 和 speakers_test 获取已发布/已上传的音色ID
+        var publishedVoiceIds = new Set()
+        var uploadedVoiceIds = new Set()
+        try {
+          var speakersResults = await Promise.all([
+            app.globalData.cloud.callFunction({
+              name: 'managerVoiceManage',
+              data: { token: token, action: 'check_speakers' }
+            }),
+            app.globalData.cloud.callFunction({
+              name: 'managerVoiceManage',
+              data: { token: token, action: 'check_upload_speakers' }
+            })
+          ])
+          var speakersRes = speakersResults[0]
+          var speakersTestRes = speakersResults[1]
+          if (speakersRes.result.code === 0 && speakersRes.result.data) {
+            publishedVoiceIds = new Set(speakersRes.result.data.voice_ids || [])
+          }
+          if (speakersTestRes.result.code === 0 && speakersTestRes.result.data) {
+            uploadedVoiceIds = new Set(speakersTestRes.result.data.voice_ids || [])
+          }
+        } catch (err) {
+          console.error('查询音色库状态失败:', err)
+        }
+
         // 扁平化日志列表
-        const flatLogs = logs.map((log, index) => ({
-          ...log,
-          openid: this.data.openid,
-          formattedTime: this.formatLogTime(log.created_at),
-          formattedType: this.formatLogType(log.type),
-          _logId: log._id || `${Date.now()}_${index}`
-        })).sort((a, b) => {
+        const flatLogs = logs.map((log, index) => {
+          var apiSource = 'qwen'
+          if (log.voice_id && typeof log.voice_id === 'string' && log.voice_id.toLowerCase().indexOf('mimo') === 0) {
+            apiSource = 'mimo'
+          }
+          if (index < 5) {
+            console.log('[showLogs] log target_model:', log.target_model, '-> api_source:', apiSource)
+          }
+          return {
+            ...log,
+            openid: this.data.openid,
+            formattedTime: this.formatLogTime(log.created_at),
+            formattedType: this.formatLogType(log.type),
+            _logId: log._id || `${Date.now()}_${index}`,
+            isPublished: log.voice_id ? publishedVoiceIds.has(log.voice_id) : false,
+            isUploaded: log.voice_id ? uploadedVoiceIds.has(log.voice_id) : false,
+            api_source: apiSource
+          }
+        }).sort(function(a, b) {
           const timeA = a.created_at ? (typeof a.created_at === 'number' ? a.created_at : new Date(a.created_at).getTime()) : 0
           const timeB = b.created_at ? (typeof b.created_at === 'number' ? b.created_at : new Date(b.created_at).getTime()) : 0
           return timeB - timeA
@@ -753,7 +798,8 @@ Page({
         this.setData({ 
           logs,
           allFlatLogsList: flatLogs,
-          flatLogsList: flatLogs
+          flatLogsList: flatLogs,
+          logSubFilter: 'all'
         })
       } else {
         this.setData({ logs: [], allFlatLogsList: [], flatLogsList: [] })
@@ -775,11 +821,30 @@ Page({
   // 日志类型筛选
   onLogFilterChange(e) {
     const filterType = e.currentTarget.dataset.type
-    const filteredLogs = this.filterLogsByType(filterType)
     this.setData({
       logFilterType: filterType,
-      flatLogsList: filteredLogs
+      logSubFilter: 'all'
     })
+    this.applyLogFilter()
+  },
+
+  // 日志二级筛选（qwen/mimo）
+  onLogSubFilterChange(e) {
+    const subFilter = e.currentTarget.dataset.type
+    this.setData({ logSubFilter: subFilter })
+    this.applyLogFilter()
+  },
+
+  // 应用日志筛选（主筛选 + 二级筛选）
+  applyLogFilter() {
+    var filteredLogs = this.filterLogsByType(this.data.logFilterType)
+    var subFilter = this.data.logSubFilter
+    if (subFilter !== 'all') {
+      filteredLogs = filteredLogs.filter(function(log) {
+        return log.api_source === subFilter
+      })
+    }
+    this.setData({ flatLogsList: filteredLogs })
   },
 
   // 根据类型筛选日志
@@ -1128,6 +1193,74 @@ Page({
       wx.hideLoading()
       console.error('获取音频临时链接失败:', err)
       wx.showToast({ title: '获取音频失败', icon: 'none' })
+    })
+  },
+
+  // 上传音色到 speakers_test
+  async onUploadVoice(e) {
+    const dataset = e.currentTarget.dataset
+    const voiceData = {
+      voice_id: dataset.voiceId,
+      voice_name: dataset.voiceName || '',
+      voice_prompt: dataset.voicePrompt || '',
+      used_api_key: dataset.usedApiKey || '',
+      preview_text: dataset.previewText || '',
+      preview_audio_file_id: dataset.previewAudioFileId || '',
+      language: dataset.language || '',
+      target_model: dataset.targetModel || '',
+      type: dataset.type || ''
+    }
+
+    if (!voiceData.voice_id) {
+      wx.showToast({ title: '缺少音色ID', icon: 'none' })
+      return
+    }
+
+    wx.showModal({
+      title: '确认上传',
+      content: `确定将音色 ${voiceData.voice_id} 上传到测试音色库吗？`,
+      success: async (res) => {
+        if (!res.confirm) return
+
+        wx.showLoading({ title: '上传中...' })
+        try {
+          const token = app.getToken()
+          const cloudRes = await app.globalData.cloud.callFunction({
+            name: 'managerVoiceManage',
+            data: {
+              token: token,
+              action: 'upload_speaker',
+              voice_data: voiceData
+            }
+          })
+          wx.hideLoading()
+
+          if (cloudRes.result.code === 0) {
+            wx.showToast({ title: '上传成功', icon: 'success' })
+            // 更新列表中该音色的上传状态
+            const allLogs = this.data.allFlatLogsList.map(log => {
+              if (log.voice_id === voiceData.voice_id) {
+                return { ...log, isUploaded: true }
+              }
+              return log
+            })
+            const filteredLogs = this.filterLogsByType(this.data.logFilterType)
+            this.setData({
+              allFlatLogsList: allLogs,
+              flatLogsList: allLogs.filter(log => {
+                if (this.data.logFilterType === 'all' || !this.data.logFilterType) return true
+                return log.type === this.data.logFilterType
+              })
+            })
+          } else {
+            wx.showToast({ title: cloudRes.result.message || '上传失败', icon: 'none' })
+          }
+        } catch (err) {
+          wx.hideLoading()
+          console.error('[UploadVoice] 上传失败:', err)
+          wx.showToast({ title: '上传失败', icon: 'none' })
+        }
+      }
     })
   }
 })

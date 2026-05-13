@@ -31,7 +31,7 @@
     </view>
 
     <!-- 列表标签：全部 / 建议清理 -->
-    <view class="list-tab-bar" wx:if="{{!loading}}">
+    <view class="list-tab-bar" wx:if="{{!loading && currentType}}">
       <view
         class="list-tab {{currentListTab === 'all' ? 'list-tab-active' : ''}}"
         bindtap="switchListTab"
@@ -53,7 +53,7 @@
     </view>
 
     <!-- 账号选项卡 -->
-    <view class="account-tabs" wx:if="{{!loading}}">
+    <view class="account-tabs" wx:if="{{!loading && currentType}}">
       <view
         class="account-tab {{currentAccount === 'all' ? 'account-tab-active' : ''}}"
         bindtap="switchAccount"
@@ -97,7 +97,7 @@
   </view>
 
   <!-- 统计信息 -->
-  <view class="stats-card">
+  <view class="stats-card" wx:if="{{currentType}}">
     <view class="stat-item">
       <text class="stat-value">{{voiceList.length}}</text>
       <text class="stat-label">{{currentListTab === 'suggest' ? '建议清理' : (currentType === 'clone' ? '声音克隆' : '声音设计')}}总数</text>
@@ -168,10 +168,17 @@
   </view>
 
   <!-- 空状态 -->
-  <view class="empty-state" wx:if="{{!loading && voiceList.length === 0}}">
+  <view class="empty-state" wx:if="{{currentType && !loading && voiceList.length === 0}}">
     <view class="empty-icon">🎙️</view>
     <text class="empty-text">{{currentListTab === 'suggest' ? '无需清理' : '暂无音色'}}</text>
     <text class="empty-tip">{{currentListTab === 'suggest' ? '没有未保存且超过20天未使用的音色' : '您还没有创建任何音色'}}</text>
+  </view>
+
+  <!-- 未选择类型提示 -->
+  <view class="empty-state" wx:if="{{!currentType && !loading}}">
+    <view class="empty-icon">🎙️</view>
+    <text class="empty-text">请选择音色类型</text>
+    <text class="empty-tip">点击上方「声音克隆」或「声音设计」查看对应音色</text>
   </view>
 
   <!-- 加载状态 -->

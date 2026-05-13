@@ -7,7 +7,7 @@ Page({
     allVoiceList: [], // 所有音色列表（用于账号过滤）
     loading: false,
     savedVoiceCount: 0,
-    currentType: 'clone', // 当前音色类型：clone(声音克隆) 或 design(声音设计)
+    currentType: '', // 当前音色类型：clone(声音克隆) 或 design(声音设计)，空表示未选择
     currentAccount: 'all', // 当前账号：all(全部), main(主账号), v(V账号), w(W账号)
     currentListTab: 'all', // 当前列表标签：all(全部) 或 suggest(建议清理)
     accountStats: { main: 0, v: 0, w: 0 }, // 各账号音色数量统计
@@ -22,13 +22,11 @@ Page({
 
   onLoad() {
     console.log('[VoiceManage] 页面加载完成')
-    if (!this.checkIsLoggedIn()) return
-    this.loadVoiceList()
+    this.checkIsLoggedIn()
   },
 
   onShow() {
-    if (!this.checkIsLoggedIn()) return
-    this.loadVoiceList()
+    this.checkIsLoggedIn()
   },
 
   // 切换账号
@@ -292,6 +290,7 @@ Page({
 
   // 刷新列表
   onRefresh() {
+    if (!this.data.currentType) return
     this.setData({
       voiceList: [],
       allVoiceList: [],

@@ -454,6 +454,151 @@ async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountTyp
   }
 }
 
+/**
+ * 上传音色到 speakers_test 集合
+ * @param {Object} voiceData - 音色数据
+ * @returns {Promise<Object>} 上传结果
+ */
+async function uploadSpeaker(voiceData) {
+  console.log('[VoiceManage] 上传音色到 speakers_test:', JSON.stringify(voiceData))
+
+  if (!voiceData || !voiceData.voice_id) {
+    return {
+      code: 400,
+      message: '音色数据不完整，缺少 voice_id',
+      data: null
+    }
+  }
+
+  try {
+    const docId = 'upload_speakers'
+    const now = new Date()
+
+    // 构建音色记录
+    const speakerItem = {
+      voice_id: voiceData.voice_id || '',
+      voice_name: voiceData.voice_name || '',
+      voice_prompt: voiceData.voice_prompt || '',
+      used_api_key: voiceData.used_api_key || '',
+      preview_text: voiceData.preview_text || '',
+      preview_audio_file_id: voiceData.preview_audio_file_id || '',
+      language: voiceData.language || '',
+      target_model: voiceData.target_model || '',
+      type: voiceData.type || ''
+    }
+
+    // 尝试获取已有文档
+    let docExists = false
+    let existingList = []
+    try {
+      const docResult = await db.collection('speakers_test').doc(docId).get()
+      if (docResult.data) {
+        docExists = true
+        existingList = docResult.data.list || []
+      }
+    } catch (err) {
+      // 文档不存在，需要创建
+      docExists = false
+    }
+
+    // 检查是否已存在相同 voice_id
+    const existingIndex = existingList.findIndex(s => s.voice_id === voiceData.voice_id)
+    if (existingIndex >= 0) {
+      // 已存在则更新
+      existingList[existingIndex] = speakerItem
+      console.log('[VoiceManage] 更新已有音色:', voiceData.voice_id)
+    } else {
+      // 不存在则添加
+      existingList.push(speakerItem)
+      console.log('[VoiceManage] 添加新音色:', voiceData.voice_id)
+    }
+
+    if (docExists) {
+      // 更新已有文档
+      await db.collection('speakers_test').doc(docId).update({
+        data: {
+          list: existingList,
+          updated_at: now
+        }
+      })
+    } else {
+      // 创建新文档
+      await db.collection('speakers_test').add({
+        data: {
+          _id: docId,
+          list: existingList,
+          updated_at: now
+        }
+      })
+    }
+
+    console.log('[VoiceManage] 上传完成，当前列表数量:', existingList.length)
+
+    return {
+      code: 0,
+      message: '上传成功',
+      data: { voice_id: voiceData.voice_id, total: existingList.length }
+    }
+  } catch (err) {
+    console.error('[VoiceManage] 上传音色失败:', err)
+    return {
+      code: 500,
+      message: err.message || '上传失败',
+      data: null
+    }
+  }
+}
+
+/**
+ * 查询 speakers 集合中 system_speakers 的所有 voice_id
+ * @returns {Promise<Object>} { code, data: { voice_ids: [...] } }
+ */
+async function checkSpeakers() {
+  try {
+    const docResult = await db.collection('speakers_test').doc('system_speakers').get()
+    const list = (docResult.data && docResult.data.list) || []
+    const voiceIds = list.map(s => s.voice_id).filter(Boolean)
+    console.log('[VoiceManage] speakers 中音色数量:', voiceIds.length)
+    return {
+      code: 0,
+      message: 'success',
+      data: { voice_ids: voiceIds }
+    }
+  } catch (err) {
+    console.error('[VoiceManage] 查询 speakers 失败:', err)
+    return {
+      code: 0,
+      message: 'success',
+      data: { voice_ids: [] }
+    }
+  }
+}
+
+/**
+ * 查询 speakers_test 集合中 upload_speakers 的所有 voice_id
+ * @returns {Promise<Object>} { code, data: { voice_ids: [...] } }
+ */
+async function checkUploadSpeakers() {
+  try {
+    const docResult = await db.collection('speakers_test').doc('upload_speakers').get()
+    const list = (docResult.data && docResult.data.list) || []
+    const voiceIds = list.map(s => s.voice_id).filter(Boolean)
+    console.log('[VoiceManage] speakers_test 中音色数量:', voiceIds.length)
+    return {
+      code: 0,
+      message: 'success',
+      data: { voice_ids: voiceIds }
+    }
+  } catch (err) {
+    console.error('[VoiceManage] 查询 speakers_test 失败:', err)
+    return {
+      code: 0,
+      message: 'success',
+      data: { voice_ids: [] }
+    }
+  }
+}
+
 // 云函数入口函数
 exports.main = async (event, context) => {
   console.log('[VoiceManage] ===== 音色管理 =====')
@@ -495,10 +640,25 @@ exports.main = async (event, context) => {
         result = await deleteVoice(voice, creator_openid, voice_type, account_type)
         break
 
+      case 'upload_speaker':
+        // 上传音色到 speakers_test
+        result = await uploadSpeaker(event.voice_data)
+        break
+
+      case 'check_speakers':
+        // 查询已发布音色ID列表
+        result = await checkSpeakers()
+        break
+
+      case 'check_upload_speakers':
+        // 查询已上传音色ID列表
+        result = await checkUploadSpeakers()
+        break
+
       default:
         return {
           code: 400,
-          message: `不支持的操作类型: ${action}，支持的操作: list, delete`,
+          message: `不支持的操作类型: ${action}，支持的操作: list, delete, upload_speaker, check_speakers, check_upload_speakers`,
           data: null
         }
     }

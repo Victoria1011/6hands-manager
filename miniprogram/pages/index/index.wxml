@@ -2,9 +2,9 @@
   <!-- 主内容区域 -->
   <view class="main-content">
     <!-- 标题 -->
-    <view class="page-title">
+    <!-- <view class="page-title">
       <text class="title-text">管理后台</text>
-    </view>
+    </view> -->
 
     <!-- 用户查询 -->
     <view class="query-section">
@@ -24,6 +24,71 @@
           查询用户
         </button>
       </view>
+    </view>
+
+    <!-- 音视频预览 -->
+    <view class="query-section">
+      <view class="section-header">
+        <text class="section-title">音视频预览</text>
+      </view>
+      <view class="query-form">
+        <view class="input-wrapper">
+          <input
+            class="query-input"
+            placeholder="请输入云存储文件 ID（cloud://...）"
+            value="{{fileIdInput}}"
+            bindinput="onFileIdInput" maxlength="-1"
+          />
+        </view>
+        <button class="query-btn" bindtap="onPlayMedia" loading="{{loadingMedia}}">
+          获取链接并播放
+        </button>
+      </view>
+
+      <block wx:if="{{mediaUrl}}">
+        <!-- 音频/视频 切换 -->
+        <view class="media-type-tabs">
+          <view
+            class="media-type-tab {{mediaType === 'audio' ? 'active' : ''}}"
+            bindtap="switchMediaType"
+            data-type="audio"
+          >🎵 音频</view>
+          <view
+            class="media-type-tab {{mediaType === 'video' ? 'active' : ''}}"
+            bindtap="switchMediaType"
+            data-type="video"
+          >🎬 视频</view>
+        </view>
+
+        <!-- 视频播放 -->
+        <video
+          wx:if="{{mediaType === 'video'}}"
+          class="media-video"
+          src="{{mediaUrl}}"
+          controls
+          show-center-play-btn
+          object-fit="contain"
+        ></video>
+
+        <!-- 音频播放 -->
+        <view wx:if="{{mediaType === 'audio'}}" class="media-audio">
+          <view class="audio-play-btn" bindtap="toggleAudioPlay">
+            {{audioPlaying ? '⏸ 暂停' : '▶ 播放'}}
+          </view>
+          <text class="audio-status">{{audioPlaying ? '播放中…' : '已暂停'}}</text>
+        </view>
+
+        <!-- 临时链接（点击复制） -->
+        <view class="media-url-row" bindtap="copyMediaUrl">
+          <text class="media-url-text">{{mediaUrl}}</text>
+          <text class="media-url-copy">复制链接</text>
+        </view>
+
+        <!-- 关闭，恢复原样 -->
+        <button class="media-close-btn" bindtap="closeMedia">
+          关闭
+        </button>
+      </block>
     </view>
 
     <!-- 功能菜单 -->

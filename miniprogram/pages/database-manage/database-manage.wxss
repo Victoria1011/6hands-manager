@@ -559,6 +559,58 @@
 }
 
 /* Upload File Logs 专用样式 */
+/* upload_file_logs 目录分类筛选 */
+.upload-cat-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+  margin-bottom: 24rpx;
+}
+
+.upload-cat-tab {
+  padding: 12rpx 28rpx;
+  background: #f5f5f5;
+  border-radius: 30rpx;
+  font-size: 26rpx;
+  color: #666;
+  transition: all 0.3s;
+  border: 2rpx solid transparent;
+}
+
+.upload-cat-tab:active {
+  transform: scale(0.95);
+  opacity: 0.8;
+}
+
+.upload-cat-tab.active {
+  background: #e3f2fd;
+  color: #1890ff;
+  border-color: #1890ff;
+  font-weight: 600;
+}
+
+.upload-cat-badge {
+  display: inline-block;
+  padding: 6rpx 20rpx;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #fff;
+  background: #1890ff;
+  border-radius: 20rpx;
+}
+
+.upload-delete-btn {
+  padding: 8rpx 28rpx;
+  font-size: 26rpx;
+  color: #fff;
+  background: #ff4d4f;
+  border-radius: 24rpx;
+}
+
+.upload-delete-btn:active {
+  opacity: 0.8;
+}
+
 .upload-item {
   background: #f9fff9;
   border-color: #e8f5e9;
@@ -1166,6 +1218,61 @@
   box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.06);
 }
 
+/* 成本统计 */
+.cost-container {
+  margin-top: 20rpx;
+  padding-top: 24rpx;
+  border-top: 2rpx solid #f0f0f0;
+}
+
+.cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #f5f5f5;
+}
+
+.cost-label {
+  font-size: 28rpx;
+  color: #555;
+}
+
+.cost-rate {
+  font-size: 22rpx;
+  color: #aaa;
+  margin-left: 8rpx;
+}
+
+.cost-value {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #fa8c16;
+}
+
+.cost-value.cost-free {
+  color: #52c41a;
+  font-weight: 500;
+}
+
+.cost-total {
+  margin-top: 8rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid #f0f0f0;
+  border-bottom: none;
+}
+
+.cost-total .cost-label {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333;
+}
+
+.cost-total .cost-value {
+  font-size: 36rpx;
+  color: #ff4d4f;
+}
+
 .stats-header {
   display: flex;
   justify-content: space-between;
@@ -1683,4 +1790,140 @@
 .btn-secondary {
   background: #f5f5f5;
   color: #666;
+}
+
+/* story_audio_projects 列表卡片 */
+.story-item {
+  flex-direction: column;
+  padding: 0;
+  background: #fff;
+  border-radius: 12rpx;
+  margin-bottom: 16rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.04);
+}
+.story-header {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 16rpx;
+}
+.story-title {
+  flex: 1;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333;
+  margin-right: 16rpx;
+  word-break: break-all;
+}
+.story-status {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 999rpx;
+  flex-shrink: 0;
+}
+.story-status-draft     { background: #f0f0f0; color: #666; }
+.story-status-processing{ background: #fff7e6; color: #fa8c16; }
+.story-status-completed,
+.story-status-success   { background: #e6fffb; color: #08979c; }
+.story-status-failed,
+.story-status-error     { background: #fff1f0; color: #f5222d; }
+.story-status-cancelled,
+.story-status-canceled  { background: #f0f0f0; color: #999; }
+
+.story-body {
+  padding: 0 24rpx 20rpx 24rpx;
+}
+.story-row {
+  display: flex;
+  font-size: 26rpx;
+  line-height: 1.6;
+  margin-top: 6rpx;
+}
+.story-label {
+  width: 130rpx;
+  color: #999;
+  flex-shrink: 0;
+}
+.story-value {
+  flex: 1;
+  color: #333;
+  word-break: break-all;
+}
+.story-value.text-value {
+  color: #555;
+}
+.story-error {
+  color: #f5222d;
+}
+.story-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16rpx;
+}
+.story-btn {
+  font-size: 24rpx;
+  padding: 10rpx 24rpx;
+  border-radius: 6rpx;
+  margin-left: 12rpx;
+}
+.story-btn-edit {
+  background: #1890ff;
+  color: #fff;
+}
+
+/* story_audio_projects 紧凑型统计 */
+.story-stats-compact { padding-bottom: 16rpx; }
+
+.story-stats-row {
+  display: flex;
+  gap: 12rpx;
+  margin-top: 12rpx;
+}
+.story-stat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14rpx 8rpx;
+  background: linear-gradient(135deg, #e3f2fd 0%, #fff 100%);
+  border: 2rpx solid #bbdefb;
+  border-radius: 10rpx;
+}
+.story-stat-num {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: #1565c0;
+  line-height: 1.15;
+}
+.story-stat-key {
+  font-size: 22rpx;
+  color: #666;
+  margin-top: 2rpx;
+}
+
+.story-stats-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin-top: 12rpx;
+}
+.story-chip {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 999rpx;
+  border: 2rpx solid transparent;
+  line-height: 1.6;
+}
+.story-chip-draft     { background: #f5f5f5; color: #666;   border-color: #e0e0e0; }
+.story-chip-processing{ background: #fff7e6; color: #fa8c16; border-color: #ffe0b2; }
+.story-chip-completed { background: #e6fffb; color: #08979c; border-color: #b2f0e6; }
+.story-chip-failed    { background: #fff1f0; color: #f5222d; border-color: #ffccc7; }
+.story-chip-cancelled { background: #fafafa; color: #999;   border-color: #eeeeee; }
+
+/* clone/design 卡片下的 Mimo/Qwen 拆分小标签 */
+.stat-sub {
+  font-size: 20rpx;
+  color: #666;
+  margin-top: 2rpx;
 }

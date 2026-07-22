@@ -1,4 +1,5 @@
 {
   "navigationBarTitleText": "音色管理",
+  "onReachBottomDistance": 150,
   "usingComponents": {}
 }

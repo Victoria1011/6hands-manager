@@ -65,6 +65,19 @@ async function getCoinBalance(openid) {
 
     console.log('[ManagerGetCoins] 查询结果:', result.data.length, '条记录')
 
+    // 查询用户设备信息（users 集合中可能有 device_info）
+    let deviceInfo = null
+    try {
+      const userResult = await db.collection('users')
+        .where({ openid: openid })
+        .get()
+      if (userResult.data && userResult.data.length > 0) {
+        deviceInfo = userResult.data[0].device_info || null
+      }
+    } catch (e) {
+      console.error('[ManagerGetCoins] 查询用户设备信息失败:', e)
+    }
+
     if (result.data.length === 0) {
       return {
         code: 0,
@@ -72,7 +85,8 @@ async function getCoinBalance(openid) {
         data: {
           openid: openid,
           balance: 0,
-          created_at: ''
+          created_at: '',
+          device_info: deviceInfo
         }
       }
     }
@@ -82,7 +96,7 @@ async function getCoinBalance(openid) {
     return {
       code: 0,
       message: 'success',
-      data: coinData
+      data: { ...coinData, device_info: deviceInfo }
     }
   } catch (err) {
     console.error('[ManagerGetCoins] 查询元宝余额失败:', err)

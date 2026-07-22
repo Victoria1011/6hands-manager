@@ -12,19 +12,26 @@
         <text class="tag-icon">📋</text>
         <text class="tag-text">logs</text>
       </view>
-      <view 
+      <!-- <view 
         class="quick-tag {{currentCollection === 'users' ? 'active' : ''}}" 
         bindtap="onQuickSelect" 
         data-collection="users">
         <text class="tag-icon">👥</text>
         <text class="tag-text">users</text>
-      </view>
-      <view 
-        class="quick-tag {{currentCollection === 'coin_transactions' ? 'active' : ''}}" 
-        bindtap="onQuickSelect" 
+      </view> -->
+      <view
+        class="quick-tag {{currentCollection === 'coin_transactions' ? 'active' : ''}}"
+        bindtap="onQuickSelect"
         data-collection="coin_transactions">
         <text class="tag-icon">💰</text>
         <text class="tag-text">coins</text>
+      </view>
+      <view
+        class="quick-tag {{currentCollection === 'story_audio_projects' ? 'active' : ''}}"
+        bindtap="onQuickSelect"
+        data-collection="story_audio_projects">
+        <text class="tag-icon">📖</text>
+        <text class="tag-text">storyAudio</text>
       </view>
     </view>
     
@@ -129,6 +136,7 @@
           <view class="stat-info">
             <text class="stat-value">{{stats.cloneCount}}</text>
             <text class="stat-label">克隆次数</text>
+            <text class="stat-sub">Mimo {{stats.cloneCountMimo}} · Qwen {{stats.cloneCountQwen}}</text>
           </view>
         </view>
         <view class="stat-card design-card">
@@ -136,6 +144,7 @@
           <view class="stat-info">
             <text class="stat-value">{{stats.designCount}}</text>
             <text class="stat-label">声音设计次数</text>
+            <text class="stat-sub">Mimo {{stats.designCountMimo}} · Qwen {{stats.designCountQwen}}</text>
           </view>
         </view>
       </view>
@@ -153,6 +162,34 @@
             <text class="stat-value">{{stats.qwenChars}}</text>
             <text class="stat-label">Qwen 字数</text>
           </view>
+        </view>
+      </view>
+
+      <!-- 成本统计 -->
+      <view class="cost-container">
+        <view class="stats-header">
+          <text class="stats-title">成本统计</text>
+          <text class="stats-period">{{statsPeriodText}}</text>
+        </view>
+        <view class="cost-row">
+          <text class="cost-label">Qwen 声音克隆 <text class="cost-rate">{{stats.cloneCountQwen}} 次 × 0.01元</text></text>
+          <text class="cost-value">¥{{costInfo.cloneCost}}</text>
+        </view>
+        <view class="cost-row">
+          <text class="cost-label">Qwen 声音设计 <text class="cost-rate">{{stats.designCountQwen}} 次 × 0.2元</text></text>
+          <text class="cost-value">¥{{costInfo.designCost}}</text>
+        </view>
+        <view class="cost-row">
+          <text class="cost-label">Qwen 语音合成 <text class="cost-rate">2元/万字</text></text>
+          <text class="cost-value">¥{{costInfo.qwenSynthCost}}</text>
+        </view>
+        <view class="cost-row">
+          <text class="cost-label">Mimo 克隆/设计/合成 <text class="cost-rate">免费</text></text>
+          <text class="cost-value cost-free">¥0.00</text>
+        </view>
+        <view class="cost-row cost-total">
+          <text class="cost-label">合计</text>
+          <text class="cost-value">¥{{costInfo.totalCost}}</text>
         </view>
       </view>
     </view>
@@ -314,13 +351,104 @@
           </view>
         </view>
         <view class="stat-card order-card">
-          <view class="stat-icon">🛒</view>
+          <view class="stat-icon">💴</view>
           <view class="stat-info">
-            <text class="stat-value">{{stats.orderCount}}</text>
-            <text class="stat-label">购买订单数</text>
+            <text class="stat-value">¥{{stats.rechargeAmount}}</text>
+            <text class="stat-label">交易总金额</text>
           </view>
         </view>
       </view>
+    </view>
+  </view>
+
+  <!-- story_audio_projects 时间选择和统计 -->
+  <view class="tts-stats-section" wx:if="{{currentCollection === 'story_audio_projects'}}">
+    <view class="time-filter-container">
+      <view class="time-filter-header">
+        <text class="time-filter-title">时间筛选</text>
+      </view>
+      <view class="time-filter-tabs">
+        <view
+          class="time-tab {{timeFilterType === 'today' ? 'active' : ''}}"
+          bindtap="onTimeFilterChange"
+          data-type="today">当天</view>
+        <view
+          class="time-tab {{timeFilterType === 'yesterday' ? 'active' : ''}}"
+          bindtap="onTimeFilterChange"
+          data-type="yesterday">昨天</view>
+        <view
+          class="time-tab {{timeFilterType === 'last7days' ? 'active' : ''}}"
+          bindtap="onTimeFilterChange"
+          data-type="last7days">近7天</view>
+        <view
+          class="time-tab {{timeFilterType === 'last30days' ? 'active' : ''}}"
+          bindtap="onTimeFilterChange"
+          data-type="last30days">近30天</view>
+        <view
+          class="time-tab {{timeFilterType === 'custom' ? 'active' : ''}}"
+          bindtap="onTimeFilterChange"
+          data-type="custom">自定义</view>
+      </view>
+      <view class="custom-date-picker" wx:if="{{timeFilterType === 'custom'}}">
+        <picker mode="date" value="{{customStartDate}}" bindchange="onStartDateChange">
+          <view class="date-picker-btn"><text>{{customStartDate || '开始日期'}}</text></view>
+        </picker>
+        <text class="date-separator">至</text>
+        <picker mode="date" value="{{customEndDate}}" bindchange="onEndDateChange">
+          <view class="date-picker-btn"><text>{{customEndDate || '结束日期'}}</text></view>
+        </picker>
+      </view>
+      <view class="time-filter-tip">
+        <text>筛选时间范围内的音频故事项目</text>
+      </view>
+    </view>
+
+    <view class="stats-container story-stats-compact">
+      <view class="stats-header">
+        <text class="stats-title">统计信息</text>
+        <text class="stats-period">{{statsPeriodText}}</text>
+      </view>
+      <!-- 紧凑型：3 项主数据 + 一行状态分桶 -->
+      <view class="story-stats-row">
+        <view class="story-stat-main">
+          <text class="story-stat-num">{{stats.storyProjectCount}}</text>
+          <text class="story-stat-key">📖 项目数</text>
+        </view>
+        <view class="story-stat-main">
+          <text class="story-stat-num">{{stats.storySynthesisCount}}</text>
+          <text class="story-stat-key">🎧 合成音频</text>
+        </view>
+        <view class="story-stat-main">
+          <text class="story-stat-num">{{stats.storyTotalChars}}</text>
+          <text class="story-stat-key">📝 总字数</text>
+        </view>
+      </view>
+      <view class="story-stats-chips">
+        <view class="story-chip story-chip-draft"><text>草稿 {{stats.storyDraftCount}}</text></view>
+        <view class="story-chip story-chip-processing"><text>生成中 {{stats.storyProcessingCount}}</text></view>
+        <view class="story-chip story-chip-completed"><text>已完成 {{stats.storyCompletedCount}}</text></view>
+        <view class="story-chip story-chip-failed"><text>失败 {{stats.storyFailedCount}}</text></view>
+        <view class="story-chip story-chip-cancelled"><text>已取消 {{stats.storyCancelledCount}}</text></view>
+      </view>
+    </view>
+  </view>
+
+  <!-- upload_file_logs 日期筛选 -->
+  <view class="tts-stats-section" wx:if="{{currentCollection === 'upload_file_logs'}}">
+    <view class="time-filter-tabs">
+      <view
+        class="time-tab {{!uploadDateFilter ? 'active' : ''}}"
+        bindtap="onUploadDateClear">
+        全部
+      </view>
+      <picker mode="date" value="{{uploadDateFilter}}" end="{{todayDate}}" bindchange="onUploadDateChange">
+        <view class="time-tab {{uploadDateFilter ? 'active' : ''}}">
+          {{uploadDateFilter || '📅 选择某一天'}}
+        </view>
+      </picker>
+    </view>
+    <view class="time-filter-tip">
+      <text>{{uploadDateFilter ? ('仅显示 ' + uploadDateFilter + ' 的上传记录') : '默认显示最近的上传记录，可选择某一天精确查询'}}</text>
     </view>
   </view>
 
@@ -332,8 +460,13 @@
     </view>
     
     <!-- 限制提示 -->
-    <view class="limit-tip" wx:if="{{currentCollection === 'tts_clone_design_logs' || currentCollection === 'users' || currentCollection === 'coin_transactions' || currentCollection === 'upload_file_logs'}}">
+    <view class="limit-tip" wx:if="{{!statsOnly && !uploadDateFilter && (currentCollection === 'tts_clone_design_logs' || currentCollection === 'users' || currentCollection === 'coin_transactions' || currentCollection === 'upload_file_logs' || currentCollection === 'story_audio_projects')}}">
       <text class="limit-tip-text">📌 提示：无时间筛选时，默认显示最近100条数据</text>
+    </view>
+
+    <!-- 仅统计模式提示（近7天/近30天数据量大，仅返回统计） -->
+    <view class="limit-tip" wx:if="{{statsOnly}}">
+      <text class="limit-tip-text">📊 数据量较大，仅显示上方统计信息（不含明细列表）。如需查看明细，请选择「今天」或「昨天」。</text>
     </view>
 
     <view class="data-list" wx:if="{{dataList.length > 0}}">
@@ -433,28 +566,36 @@
 
       <!-- upload_file_logs 专用展示 -->
       <view wx:if="{{currentCollection === 'upload_file_logs'}}">
-        <view class="data-item upload-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
-          <view class="item-row">
-            <view class="item-index">{{index + 1}}</view>
-            <view class="upload-item-header">
-            <text class="data-id">ID: {{item._id}}</text>
-            <text class="data-action">点击编辑</text>
-          </view>
+        <!-- 按目录分类筛选 -->
+        <view class="upload-cat-tabs">
+          <view
+            class="upload-cat-tab {{uploadCategoryFilter === cat.key ? 'active' : ''}}"
+            wx:for="{{uploadCategories}}"
+            wx:key="key"
+            wx:for-item="cat"
+            bindtap="onUploadCategoryChange"
+            data-type="{{cat.key}}"
+          >{{cat.label}} ({{cat.count}})</view>
+        </view>
 
+        <view class="data-item upload-item" wx:for="{{filteredUploadList}}" wx:key="_id">
+          <view class="upload-item-header">
+            <view class="upload-cat-badge">📁 {{item.category}}</view>
+            <view class="upload-delete-btn" catchtap="onDeleteUpload" data-id="{{item._id}}" data-file-id="{{item.file_id}}">删除</view>
+          </view>
           <view class="upload-item-body">
             <view class="upload-field">
               <text class="upload-label">openid:</text>
-              <text class="upload-value openid-value link-text" bindtap="goToCustomerService" data-openid="{{item.openid}}">{{item.openid || '-'}}</text>
+              <text class="upload-value openid-value link-text" catchtap="goToCustomerService" data-openid="{{item.openid}}">{{item.openid || '-'}}</text>
             </view>
             <view class="upload-field">
-              <text class="upload-label">file_ID:</text>
-              <text class="upload-value file-id-value copy-text" bindtap="onCopyText" data-text="{{item.file_id}}">{{item.file_id || '-'}}</text>
+              <text class="upload-label">file_id:</text>
+              <text class="upload-value file-id-value copy-text" catchtap="onCopyText" data-text="{{item.file_id}}">{{item.file_id || '-'}}</text>
             </view>
             <view class="upload-field">
               <text class="upload-label">date:</text>
               <text class="upload-value">{{item.formattedTime}}</text>
             </view>
-          </view>
           </view>
         </view>
       </view>
@@ -624,8 +765,66 @@
         </view>
       </view>
 
+      <!-- story_audio_projects 展示 -->
+      <view wx:if="{{currentCollection === 'story_audio_projects'}}">
+        <view class="data-item story-item" wx:for="{{dataList}}" wx:key="_id">
+          <view class="item-row">
+            <view class="item-index">{{index + 1}}</view>
+            <view class="story-header">
+              <text class="story-title copy-text" bindtap="onCopyText" data-text="{{item.title}}">{{item.title || '(无标题)'}}</text>
+              <text class="story-status story-status-{{item.statusKey}}">{{item.statusLabel}}</text>
+            </view>
+          </view>
+          <view class="story-body">
+            <view class="story-row">
+              <text class="story-label">openid:</text>
+              <text class="story-value link-text" bindtap="goToCustomerService" data-openid="{{item.openid}}">{{item.openid || '-'}}</text>
+            </view>
+            <view class="story-row">
+              <text class="story-label">_id:</text>
+              <text class="story-value copy-text" bindtap="onCopyText" data-text="{{item._id}}">{{item._id}}</text>
+            </view>
+            <view class="story-row">
+              <text class="story-label">当前步骤:</text>
+              <text class="story-value">step {{item.current_step || 0}}</text>
+            </view>
+            <view class="story-row" wx:if="{{item.progress}}">
+              <text class="story-label">进度:</text>
+              <text class="story-value">已完成 {{item.progress.completed_items || 0}}{{item.progress.failed_items ? (' / 失败 ' + item.progress.failed_items) : ''}}</text>
+            </view>
+            <view class="story-row">
+              <text class="story-label">合成:</text>
+              <text class="story-value">{{item.synthesisDone}} / {{item.synthesisTotal}}</text>
+            </view>
+            <view class="story-row" wx:if="{{item.textLength}}">
+              <text class="story-label">字数:</text>
+              <text class="story-value">{{item.textLength}}</text>
+            </view>
+            <view class="story-row" wx:if="{{item.textExcerpt}}">
+              <text class="story-label">正文:</text>
+              <text class="story-value text-value copy-text" bindtap="onCopyText" data-text="{{item.story.text}}">{{item.textExcerpt}}</text>
+            </view>
+            <view class="story-row" wx:if="{{item.hasError}}">
+              <text class="story-label">错误:</text>
+              <text class="story-value story-error copy-text" bindtap="onCopyText" data-text="{{item.processing_error}}">{{item.processing_error}}</text>
+            </view>
+            <view class="story-row">
+              <text class="story-label">创建:</text>
+              <text class="story-value">{{item.created_at_formatted}}</text>
+            </view>
+            <view class="story-row">
+              <text class="story-label">更新:</text>
+              <text class="story-value">{{item.updated_at_formatted}}</text>
+            </view>
+            <view class="story-actions">
+              <view class="story-btn story-btn-edit" catchtap="onViewItem" data-index="{{index}}">查看/编辑</view>
+            </view>
+          </view>
+        </view>
+      </view>
+
       <!-- 其他集合的通用展示 -->
-      <view wx:if="{{currentCollection !== 'tts_clone_design_logs' && currentCollection !== 'upload_file_logs' && currentCollection !== 'api_key_usage' && currentCollection !== 'coin_transactions' && currentCollection !== 'users'}}">
+      <view wx:if="{{currentCollection !== 'tts_clone_design_logs' && currentCollection !== 'upload_file_logs' && currentCollection !== 'api_key_usage' && currentCollection !== 'coin_transactions' && currentCollection !== 'users' && currentCollection !== 'story_audio_projects'}}">
         <view class="data-item" wx:for="{{dataList}}" wx:key="_id" bindtap="onViewItem" data-index="{{index}}">
           <view class="item-row">
             <view class="item-index">{{index + 1}}</view>
@@ -660,7 +859,7 @@
     <text class="empty-text">请选择数据表</text>
   </view>
 
-  <view class="empty-state" wx:if="{{currentCollection && !loading && dataList.length === 0}}">
+  <view class="empty-state" wx:if="{{currentCollection && !loading && !statsOnly && dataList.length === 0}}">
     <view class="empty-icon">📭</view>
     <text class="empty-text">暂无数据</text>
   </view>

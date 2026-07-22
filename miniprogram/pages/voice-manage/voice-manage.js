@@ -1,11 +1,18 @@
 // voice-manage.js
 const app = getApp()
 
+// 懒加载每页渲染数量：列表只渲染一个窗口，下滑到底再追加，
+// 避免一次性渲染上千张卡片导致视图层卡死、页面无法点击。
+const PAGE_SIZE = 30
+
 Page({
   data: {
-    voiceList: [],
+    voiceList: [], // 当前已渲染的窗口（非全量）
     allVoiceList: [], // 所有音色列表（用于账号过滤）
+    hasMore: false, // 是否还有未渲染的音色（控制底部提示与上拉加载）
     loading: false,
+    displayCount: 0, // 当前筛选条件下应展示的音色总数（稳定值，不受分批渲染影响）
+    totalCount: 0, // 当前类型下所有账号的音色总数（"全部" 账号标签使用）
     savedVoiceCount: 0,
     currentType: '', // 当前音色类型：clone(声音克隆) 或 design(声音设计)，空表示未选择
     currentAccount: 'all', // 当前账号：all(全部), main(主账号), v(V账号), w(W账号)
@@ -17,7 +24,8 @@ Page({
     selectedCount: 0, // 已选择数量
     suggestDeleteList: [], // 建议删除的音色列表
     suggestDeleteCount: 0, // 建议删除数量
-    suggestDeleteStats: { main: 0, v: 0, w: 0 } // 各账号建议删除数量统计
+    suggestDeleteStats: { main: 0, v: 0, w: 0 }, // 各账号建议删除数量统计
+    currentPlayingAudioId: null // 当前正在播放的音频文件 ID
   },
 
   onLoad() {
@@ -27,6 +35,142 @@ Page({
 
   onShow() {
     this.checkIsLoggedIn()
+  },
+
+  // 页面滚动到底部：追加渲染下一页（懒加载）
+  onReachBottom() {
+    this.loadMore()
+  },
+
+  // 离开页面：停止并销毁音频，避免后台继续播放
+  onHide() {
+    this._destroyAudio()
+  },
+
+  onUnload() {
+    this._destroyAudio()
+  },
+
+  _destroyAudio() {
+    if (this.innerAudioContext) {
+      try {
+        this.innerAudioContext.stop()
+        this.innerAudioContext.destroy()
+      } catch (e) { /* ignore */ }
+      this.innerAudioContext = null
+    }
+    if (this.data.currentPlayingAudioId) {
+      this.setData({ currentPlayingAudioId: null })
+    }
+  },
+
+  // 播放预览音频并复制临时链接（声音设计建议清理列表用）
+  onPlayAudio(e) {
+    const audioFileId = e.currentTarget.dataset.audioId
+    if (!audioFileId) {
+      wx.showToast({ title: '无音频文件', icon: 'none' })
+      return
+    }
+
+    // 再次点击同一音频：停止
+    if (this.data.currentPlayingAudioId === audioFileId) {
+      this._destroyAudio()
+      wx.showToast({ title: '已停止', icon: 'none' })
+      return
+    }
+
+    // 切换音频：先停掉前一个
+    this._destroyAudio()
+
+    wx.showLoading({ title: '获取音频链接...', mask: true })
+    app.globalData.cloud.getTempFileURL({ fileList: [audioFileId] })
+      .then(res => {
+        wx.hideLoading()
+        const f = res.fileList && res.fileList[0]
+        if (!f || f.status !== 0 || !f.tempFileURL) {
+          wx.showToast({ title: '获取音频链接失败', icon: 'none' })
+          return
+        }
+        const url = f.tempFileURL
+        wx.setClipboardData({
+          data: url,
+          success: () => wx.showToast({ title: '链接已复制', icon: 'success' })
+        })
+
+        const ctx = wx.createInnerAudioContext()
+        ctx.src = url
+        ctx.play()
+        ctx.onError(err => {
+          console.error('[VoiceManage] 音频播放失败:', err)
+          wx.showToast({ title: '播放失败', icon: 'none' })
+          this._destroyAudio()
+        })
+        ctx.onEnded(() => {
+          console.log('[VoiceManage] 音频播放结束')
+          this._destroyAudio()
+        })
+        this.innerAudioContext = ctx
+        this.setData({ currentPlayingAudioId: audioFileId })
+      })
+      .catch(err => {
+        wx.hideLoading()
+        console.error('[VoiceManage] 获取临时链接失败:', err)
+        wx.showToast({ title: '获取音频失败', icon: 'none' })
+      })
+  },
+
+  // 上传音色到 speakers_test（声音设计建议清理列表用）
+  async onUploadVoice(e) {
+    const dataset = e.currentTarget.dataset
+    const voiceData = {
+      voice_id: dataset.voiceId,
+      voice_name: dataset.voiceName || '',
+      voice_prompt: dataset.voicePrompt || '',
+      used_api_key: dataset.usedApiKey || '',
+      preview_text: dataset.previewText || '',
+      preview_audio_file_id: dataset.previewAudioFileId || '',
+      language: dataset.language || '',
+      target_model: dataset.targetModel || '',
+      type: dataset.type || ''
+    }
+    if (!voiceData.voice_id) {
+      wx.showToast({ title: '缺少音色ID', icon: 'none' })
+      return
+    }
+
+    wx.showModal({
+      title: '确认上传',
+      content: `确定将音色 ${voiceData.voice_id} 上传到测试音色库吗？`,
+      success: async (modalRes) => {
+        if (!modalRes.confirm) return
+        wx.showLoading({ title: '上传中...' })
+        try {
+          const token = app.getToken()
+          const cloudRes = await app.globalData.cloud.callFunction({
+            name: 'managerVoiceManage',
+            data: { token, action: 'upload_speaker', voice_data: voiceData }
+          })
+          wx.hideLoading()
+          if (cloudRes.result.code === 0) {
+            wx.showToast({ title: '上传成功', icon: 'success' })
+            // 本地标记为已上传：在过滤列表与已渲染窗口里同步更新该 voice
+            const vid = voiceData.voice_id
+            const markUploaded = (v) => v && v.voice === vid ? { ...v, isUploaded: true } : v
+            if (Array.isArray(this._filteredList)) {
+              this._filteredList = this._filteredList.map(markUploaded)
+            }
+            const voiceList = (this.data.voiceList || []).map(markUploaded)
+            this.setData({ voiceList })
+          } else {
+            wx.showToast({ title: cloudRes.result.message || '上传失败', icon: 'none' })
+          }
+        } catch (err) {
+          wx.hideLoading()
+          console.error('[VoiceManage] 上传音色失败:', err)
+          wx.showToast({ title: '上传失败', icon: 'none' })
+        }
+      }
+    })
   },
 
   // 切换账号
@@ -47,7 +191,6 @@ Page({
     console.log('[VoiceManage] 切换列表标签:', tab)
     this.setData({
       currentListTab: tab,
-      voiceList: [],
       batchMode: false,
       selectedVoices: {},
       selectedCount: 0
@@ -75,10 +218,10 @@ Page({
 
     this.setData({
       savedVoiceCount: savedVoiceCount,
-      voiceList: []
+      displayCount: filteredList.length // 总数立即写入，不受懒加载窗口影响
     })
 
-    this.renderListInBatches(filteredList)
+    this.renderFilteredList(filteredList)
   },
 
   // 检查是否已登录
@@ -120,6 +263,13 @@ Page({
     const seconds = String(date.getSeconds()).padStart(2, '0')
 
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+  },
+
+  // 解析时间为毫秒时间戳（兼容 iOS 的 "YYYY-MM-DD HH:mm:ss" 字符串），无法解析返回 NaN
+  _parseVoiceTime(value) {
+    if (!value && value !== 0) return NaN
+    if (typeof value === 'number') return value
+    return Date.parse(String(value).replace(' ', 'T'))
   },
 
   // 加载音色列表
@@ -166,11 +316,13 @@ Page({
         }
 
         const savedVoiceCount = filteredList.filter(voice => voice.user_info && voice.user_info.type === 'saved').length
+        const totalCount = (accountStats.main || 0) + (accountStats.v || 0) + (accountStats.w || 0)
 
         this.setData({
           allVoiceList: allVoiceList,
-          voiceList: [],
           savedVoiceCount: savedVoiceCount,
+          displayCount: filteredList.length,
+          totalCount: totalCount,
           accountStats: accountStats,
           loading: false,
           suggestDeleteList: suggestData.list,
@@ -178,7 +330,20 @@ Page({
           suggestDeleteStats: suggestData.stats
         })
 
-        this.renderListInBatches(filteredList)
+        this.renderFilteredList(filteredList)
+
+        // 若部分账号数据拉取不完整，明确提示用户数量可能偏少，可下拉/点击刷新重试
+        if (res.result.data.incomplete) {
+          const accs = (res.result.data.incomplete_accounts || [])
+            .map(a => this.data.accountNames[a] || a)
+            .join('、')
+          wx.showModal({
+            title: '数量可能不完整',
+            content: `${accs} 的音色未全部获取成功（可能被限流或网络超时），当前数量可能偏少。请点击「刷新」重试。`,
+            showCancel: false,
+            confirmText: '知道了'
+          })
+        }
       } else {
         wx.showToast({ title: res.result.message || '查询失败', icon: 'none' })
         this.setData({ loading: false })
@@ -190,49 +355,58 @@ Page({
     }
   },
 
-  // 纯函数：计算建议删除的音色列表（未保存 + 超过 20 天未使用）
+  // 纯函数：计算建议删除的音色列表（未保存 且 最近 30 天未使用，含从未使用过）
   _computeSuggestDelete(allVoiceList) {
     const now = Date.now()
     const DAY_MS = 24 * 60 * 60 * 1000
-    const THRESHOLD_DAYS = 20
+    const THRESHOLD_DAYS = 30
 
     let savedCount = 0
-    let neverUsedCount = 0
-    let recentUsedCount = 0
-    let oldUnusedCount = 0
+    let systemCount = 0    // 系统/预置音色：排除
+    let recentCount = 0    // 最近30天内有活动（使用过或新建），排除
+    let oldUnusedCount = 0 // 超过30天未使用且创建已超过30天，建议删除
+    let unknownCount = 0   // 既无使用时间也无创建时间，无法判断，保守排除
 
     const suggestList = allVoiceList.filter((voice) => {
+      // 已保存的音色：排除
       if (voice.user_info && voice.user_info.type === 'saved') {
         savedCount++
         return false
       }
 
-      if (!voice.last_used_time) {
-        neverUsedCount++
-        return true
+      // 系统/预置音色（speakers_test 中）：永远不应建议清理
+      if (voice.user_info && voice.user_info.type === 'system') {
+        systemCount++
+        return false
       }
 
-      const lastUsedTime = new Date(voice.last_used_time).getTime()
-      if (isNaN(lastUsedTime)) {
-        neverUsedCount++
-        return true
+      // 参考时间：优先用最近使用时间；从未使用过则退回创建时间(gmt_create)，
+      // 避免把刚创建、尚未使用（也未关联到用户/使用记录）的新音色误判为建议清理。
+      const lastUsedTime = this._parseVoiceTime(voice.last_used_time)
+      const createTime = this._parseVoiceTime(voice.gmt_create)
+      const refTime = !isNaN(lastUsedTime) ? lastUsedTime : createTime
+
+      // 完全无法判断时间：保守起见不建议删除
+      if (isNaN(refTime)) {
+        unknownCount++
+        return false
       }
 
-      const daysDiff = (now - lastUsedTime) / DAY_MS
+      const daysDiff = (now - refTime) / DAY_MS
       if (daysDiff > THRESHOLD_DAYS) {
         oldUnusedCount++
         return true
-      } else {
-        recentUsedCount++
-        return false
       }
+      recentCount++
+      return false
     })
 
     console.log('[VoiceManage] ===== 建议删除统计 =====')
     console.log('[VoiceManage] 已保存(排除):', savedCount)
-    console.log('[VoiceManage] 从未使用(建议删除):', neverUsedCount)
-    console.log('[VoiceManage] 超过20天未用(建议删除):', oldUnusedCount)
-    console.log('[VoiceManage] 20天内使用过(排除):', recentUsedCount)
+    console.log('[VoiceManage] 系统/预置(排除):', systemCount)
+    console.log('[VoiceManage] 超过30天未使用/未活动(建议删除):', oldUnusedCount)
+    console.log('[VoiceManage] 30天内有活动(排除):', recentCount)
+    console.log('[VoiceManage] 无法判断时间(排除):', unknownCount)
     console.log('[VoiceManage] 建议删除总计:', suggestList.length)
     console.log('[VoiceManage] =========================')
 
@@ -246,25 +420,33 @@ Page({
     return { list: suggestList, count: suggestList.length, stats }
   },
 
-  // 分批渲染列表
-  renderListInBatches(fullList) {
-    const BATCH_SIZE = 50
-    let index = 0
+  // 懒加载：完整过滤结果存在 this._filteredList（不进 data，避免大数组反复传给视图层），
+  // data.voiceList 只保留已渲染的窗口。首屏只渲染第一页，其余下滑到底再追加。
+  renderFilteredList(filteredList) {
+    this._filteredList = filteredList || []
+    const firstPage = this._filteredList.slice(0, PAGE_SIZE)
+    this.setData({
+      voiceList: firstPage,
+      hasMore: this._filteredList.length > firstPage.length
+    })
+    // 切换账号/标签后回到顶部，避免停留在上一个列表的滚动位置
+    wx.pageScrollTo({ scrollTop: 0, duration: 0 })
+  },
 
-    const renderNext = () => {
-      if (index >= fullList.length) return
-      const batch = fullList.slice(index, index + BATCH_SIZE)
-      const currentList = this.data.voiceList
-      this.setData({
-        voiceList: currentList.concat(batch)
-      })
-      index += BATCH_SIZE
-      if (index < fullList.length) {
-        setTimeout(renderNext, 30)
-      }
+  // 追加渲染下一页
+  loadMore() {
+    if (!this.data.hasMore) return
+    const filteredList = this._filteredList || []
+    const current = this.data.voiceList.length
+    const next = filteredList.slice(current, current + PAGE_SIZE)
+    if (next.length === 0) {
+      this.setData({ hasMore: false })
+      return
     }
-
-    renderNext()
+    this.setData({
+      voiceList: this.data.voiceList.concat(next),
+      hasMore: current + next.length < filteredList.length
+    })
   },
 
   // 切换音色类型
@@ -272,11 +454,15 @@ Page({
     const type = e.currentTarget.dataset.type
     if (type === this.data.currentType) return
 
+    this._filteredList = []
     this.setData({
       currentType: type,
       voiceList: [],
       allVoiceList: [],
+      hasMore: false,
       savedVoiceCount: 0,
+      displayCount: 0,
+      totalCount: 0,
       suggestDeleteList: [],
       suggestDeleteCount: 0,
       currentListTab: 'all',
@@ -291,10 +477,14 @@ Page({
   // 刷新列表
   onRefresh() {
     if (!this.data.currentType) return
+    this._filteredList = []
     this.setData({
       voiceList: [],
       allVoiceList: [],
+      hasMore: false,
       savedVoiceCount: 0,
+      displayCount: 0,
+      totalCount: 0,
       suggestDeleteList: [],
       suggestDeleteCount: 0,
       batchMode: false,
@@ -400,16 +590,16 @@ Page({
     console.log('[VoiceManage] 选择音色:', voice, '已选择数:', selectedCount)
   },
 
-  // 全选/取消全选
+  // 全选/取消全选（针对当前筛选下的全部可删除音色，而非仅已渲染窗口）
   toggleSelectAll() {
-    const voiceList = this.data.voiceList
-    const selectedVoices = {}
+    const list = this._filteredList || this.data.voiceList
+    const selectable = list.filter(v => !v.user_info || v.user_info.type !== 'saved')
+    const shouldSelectAll = this.data.selectedCount < selectable.length
 
-    voiceList.forEach(voice => {
-      if (!voice.user_info || voice.user_info.type !== 'saved') {
-        selectedVoices[voice.voice] = !this.data.selectedCount || this.data.selectedCount < voiceList.filter(v => !v.user_info || v.user_info.type !== 'saved').length
-      }
-    })
+    const selectedVoices = {}
+    if (shouldSelectAll) {
+      selectable.forEach(v => { selectedVoices[v.voice] = true })
+    }
 
     const selectedCount = Object.keys(selectedVoices).filter(key => selectedVoices[key]).length
     this.setData({ selectedVoices, selectedCount })
@@ -441,13 +631,13 @@ Page({
     wx.showLoading({ title: '删除中...' })
 
     const selectedVoices = this.data.selectedVoices
-    const voiceList = this.data.voiceList
+    const sourceList = this._filteredList || this.data.voiceList
     const token = app.getToken()
 
     let successCount = 0
     let failCount = 0
 
-    const voicesToDelete = voiceList
+    const voicesToDelete = sourceList
       .filter(voice => selectedVoices[voice.voice] && (!voice.user_info || voice.user_info.type !== 'saved'))
       .map(voice => ({
         voice: voice.voice,
@@ -504,7 +694,7 @@ Page({
 
     wx.showModal({
       title: '确认批量清理',
-      content: `确定要删除 ${count} 个建议清理的音色吗？（未保存且超过20天未使用）`,
+      content: `确定要删除 ${count} 个建议清理的音色吗？（未保存且最近30天未使用）`,
       confirmText: '全部删除',
       confirmColor: '#ff4d4f',
       success: async (res) => {

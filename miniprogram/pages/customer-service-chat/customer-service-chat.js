@@ -6,15 +6,18 @@ Page({
     openid: '',
     messages: [],
     inputContent: '',
-    scrollToBottom: false,
+    scrollIntoView: '', // 绑定 scroll-view 的 scroll-into-view，指向最后一条消息的 id
     loading: false,
     showActionSheet: false,
     activeTab: 'chat',
     userInfo: {
       openid: '',
       registerTime: '',
-      coins: 0
+      coins: 0,
+      deviceBrand: '' // device_info.brand，有则在注册时间后显示标签
     },
+    deviceInfoList: [], // device_info 全部内容（弹窗用）：[{ key, value }]
+    showDeviceModal: false, // 设备信息弹窗
     blacklistReason: '',
     logs: [],
     flatLogsList: [], // 扁平化的日志列表
@@ -174,9 +177,9 @@ Page({
           msg.formattedTime = this.formatTime(msg.created_at)
         })
         this.setData({
-          messages: messages,
-          scrollToBottom: true
+          messages: messages
         })
+        this.scrollToBottom()
       } else {
         wx.showToast({
           title: res.result.message || '获取失败',
@@ -221,9 +224,9 @@ Page({
 
     this.setData({
       messages: [...this.data.messages, tempMessage],
-      inputContent: '',
-      scrollToBottom: true
+      inputContent: ''
     })
+    this.scrollToBottom()
 
     try {
       // 获取 token
@@ -327,9 +330,9 @@ Page({
     }
 
     this.setData({
-      messages: [...this.data.messages, tempMessage],
-      scrollToBottom: true
+      messages: [...this.data.messages, tempMessage]
     })
+    this.scrollToBottom()
 
     try {
       const token = app.getToken()
@@ -411,9 +414,9 @@ Page({
       }
 
       this.setData({
-        messages: [...this.data.messages, tempMessage],
-        scrollToBottom: true
+        messages: [...this.data.messages, tempMessage]
       })
+      this.scrollToBottom()
 
       // 上传图片到云存储
       const uploadRes = await app.globalData.cloud.uploadFile({
@@ -477,10 +480,18 @@ Page({
   },
 
   // 滚动到底部
+  // scroll-into-view 仅在绑定值「发生变化」时才会滚动。新增消息时 id 会变（msg-N → msg-N+1），
+  // 因此能正常触发；若目标 id 未变（如刷新后条数相同），先清空再设置以强制触发滚动。
   scrollToBottom() {
-    this.setData({
-      scrollToBottom: true
-    })
+    const len = this.data.messages.length
+    if (len === 0) return
+    const id = 'msg-' + (len - 1)
+    if (this.data.scrollIntoView === id) {
+      this.setData({ scrollIntoView: '' })
+      setTimeout(() => this.setData({ scrollIntoView: id }), 30)
+    } else {
+      this.setData({ scrollIntoView: id })
+    }
   },
 
   // 格式化时间
@@ -577,15 +588,48 @@ Page({
           formattedTime = `${year}-${month}-${day} ${hours}:${minutes}`
         }
 
+        // 设备信息（users 集合中可能存在 device_info）
+        const deviceInfo = coinsData.device_info || null
+        const deviceBrand = deviceInfo ? (deviceInfo.brand || '') : ''
+        const deviceInfoList = deviceInfo
+          ? Object.keys(deviceInfo).map(key => ({ key, value: this.stringifyDeviceValue(deviceInfo[key]) }))
+          : []
+
         this.setData({
           'userInfo.openid': this.data.openid,
           'userInfo.registerTime': formattedTime,
-          'userInfo.coins': balance
+          'userInfo.coins': balance,
+          'userInfo.deviceBrand': deviceBrand,
+          deviceInfoList: deviceInfoList
         })
       }
     } catch (err) {
       console.error('获取用户信息失败:', err)
     }
+  },
+
+  // 将 device_info 的值转为可展示的字符串
+  stringifyDeviceValue(val) {
+    if (val === null || val === undefined) return '-'
+    if (typeof val === 'object') {
+      try {
+        return JSON.stringify(val)
+      } catch (e) {
+        return String(val)
+      }
+    }
+    return String(val)
+  },
+
+  // 显示设备信息弹窗
+  onShowDeviceInfo() {
+    if (!this.data.deviceInfoList.length) return
+    this.setData({ showDeviceModal: true })
+  },
+
+  // 关闭设备信息弹窗
+  onCloseDeviceInfo() {
+    this.setData({ showDeviceModal: false })
   },
 
   // 黑名单开关变化

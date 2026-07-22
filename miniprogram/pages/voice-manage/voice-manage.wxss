@@ -459,6 +459,16 @@
   color: #999;
 }
 
+/* 列表底部加载提示 */
+.load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30rpx 0 10rpx;
+  font-size: 24rpx;
+  color: #999;
+}
+
 /* 加载状态 */
 .loading-state {
   display: flex;
@@ -517,6 +527,30 @@
   text-align: center;
 }
 
+/* 建议清理操作区：选择删除 + 一键清理 */
+.suggest-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex-shrink: 0;
+}
+
+.suggest-select-btn {
+  font-size: 24rpx;
+  padding: 6rpx 20rpx;
+  background: #1890ff;
+  color: #fff;
+  border: none;
+  border-radius: 6rpx;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.suggest-select-btn::after {
+  border: none;
+}
+
 .suggest-clean-btn {
   font-size: 24rpx;
   padding: 6rpx 20rpx;
@@ -525,8 +559,8 @@
   border: none;
   border-radius: 6rpx;
   white-space: nowrap;
-  margin-left: auto;
   flex-shrink: 0;
+  margin: 0;
 }
 
 .suggest-clean-btn::after {
@@ -545,4 +579,47 @@
 .suggest-hint-text {
   font-size: 24rpx;
   color: #d48806;
+}
+
+/* 声音设计建议清理：播放/上传操作行 */
+.voice-design-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+  padding: 12rpx 0 0 0;
+  border-top: 2rpx dashed #eee;
+  margin-top: 10rpx;
+}
+.design-action-row {
+  display: flex;
+  align-items: center;
+  font-size: 26rpx;
+  line-height: 1.6;
+}
+.design-action-label {
+  width: 80rpx;
+  color: #999;
+  flex-shrink: 0;
+}
+.design-play-link {
+  color: #07c160;
+  padding: 2rpx 0;
+}
+.design-play-link:active {
+  opacity: 0.6;
+}
+.design-upload-link {
+  color: #1890ff;
+  padding: 2rpx 0;
+}
+.design-upload-link:active {
+  opacity: 0.6;
+}
+.design-uploaded-tag {
+  color: #08979c;
+  background: #e6fffb;
+  border: 2rpx solid #b2f0e6;
+  padding: 2rpx 14rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
 }

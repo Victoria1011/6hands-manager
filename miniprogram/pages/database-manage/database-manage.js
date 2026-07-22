@@ -1,6 +1,23 @@
 // database-manage.js
 const app = getApp()
 
+// 充值元宝 -> 实付人民币（元）换算
+// 基础汇率：10000 元宝 = 1 元；含赠送的套餐按实付金额映射（赠送元宝不计入实付）
+// 入门 ¥1=1万；标准 ¥10=10万(+赠1万)；畅享 ¥100=100万(+赠20万)
+const RECHARGE_COINS_TO_RMB = {
+  10000: 1,
+  100000: 10,
+  110000: 10,
+  1000000: 100,
+  1200000: 100
+}
+
+function rechargeCoinsToRmb(coins) {
+  const n = Number(coins) || 0
+  if (RECHARGE_COINS_TO_RMB[n] != null) return RECHARGE_COINS_TO_RMB[n]
+  return n / 10000 // 兜底：按基础汇率换算
+}
+
 Page({
     data: {
     collections: [],
@@ -48,14 +65,42 @@ Page({
     stats: {
       cloneCount: 0,
       designCount: 0,
+      cloneCountMimo: 0,
+      cloneCountQwen: 0,
+      designCountMimo: 0,
+      designCountQwen: 0,
       mimoChars: 0,
       qwenChars: 0,
       newUsersCount: 0,
       signCount: 0,
       adCount: 0,
-      orderCount: 0
+      rechargeAmount: 0,
+      // story_audio_projects 统计
+      storyProjectCount: 0,
+      storyDraftCount: 0,
+      storyProcessingCount: 0,
+      storyCompletedCount: 0,
+      storyFailedCount: 0,
+      storyCancelledCount: 0,
+      storySynthesisCount: 0,
+      storyTotalChars: 0
     },
     statsPeriodText: '',
+    // logs 成本统计（仅 tts_clone_design_logs 使用，单位：元）
+    // 计价：Qwen 声音克隆 0.01元/次；声音设计 0.2元/次；Qwen 语音合成 2元/万字；Mimo 克隆/设计/合成 免费
+    costInfo: {
+      cloneCost: '0.00',
+      designCost: '0.00',
+      qwenSynthCost: '0.00',
+      totalCost: '0.00'
+    },
+    statsOnly: false, // 大范围（近7/30天）仅返回统计、不返回列表时为 true
+    // upload_file_logs 按目录分类
+    uploadCategoryFilter: 'all', // 当前选中的目录分类
+    uploadCategories: [], // 目录分类汇总：[{ key, label, count }]
+    filteredUploadList: [], // 按目录分类筛选后的列表
+    uploadDateFilter: '', // 按日期筛选：'' 表示全部，否则为 'YYYY-MM-DD'
+    todayDate: '', // 今天日期（限制 date picker 最大可选）
     // api_key_usage 编辑相关
     showApiKeyEditModal: false,
     apiKeyEditIndex: -1,
@@ -69,6 +114,7 @@ Page({
     console.log('[DatabaseManage] 页面加载完成')
     // 检查登录状态
     if (!this.checkIsLoggedIn()) return
+    this.setData({ todayDate: this.formatDateForDisplay(new Date()) })
     this.loadCollections()
   },
 
@@ -154,6 +200,11 @@ Page({
       pageIndex: 0,
       total: 0,
       hasMore: false,
+      statsOnly: false,
+      uploadCategoryFilter: 'all',
+      uploadCategories: [],
+      filteredUploadList: [],
+      uploadDateFilter: '',
       loading: true, // 立即显示 loading
       requesting: false, // 重置请求状态
       // 重置统计
@@ -165,12 +216,24 @@ Page({
       stats: {
         cloneCount: 0,
         designCount: 0,
+        cloneCountMimo: 0,
+        cloneCountQwen: 0,
+        designCountMimo: 0,
+        designCountQwen: 0,
         mimoChars: 0,
         qwenChars: 0,
         newUsersCount: 0,
         signCount: 0,
         adCount: 0,
-        orderCount: 0
+        rechargeAmount: 0,
+        storyProjectCount: 0,
+        storyDraftCount: 0,
+        storyProcessingCount: 0,
+        storyCompletedCount: 0,
+        storyFailedCount: 0,
+        storyCancelledCount: 0,
+        storySynthesisCount: 0,
+        storyTotalChars: 0
       }
     }, () => {
       // setData 完成后加载数据
@@ -194,6 +257,11 @@ Page({
       pageIndex: 0,
       total: 0,
       hasMore: false,
+      statsOnly: false,
+      uploadCategoryFilter: 'all',
+      uploadCategories: [],
+      filteredUploadList: [],
+      uploadDateFilter: '',
       loading: true, // 立即显示 loading
       requesting: false, // 重置请求状态
       // 重置统计
@@ -205,12 +273,24 @@ Page({
       stats: {
         cloneCount: 0,
         designCount: 0,
+        cloneCountMimo: 0,
+        cloneCountQwen: 0,
+        designCountMimo: 0,
+        designCountQwen: 0,
         mimoChars: 0,
         qwenChars: 0,
         newUsersCount: 0,
         signCount: 0,
         adCount: 0,
-        orderCount: 0
+        rechargeAmount: 0,
+        storyProjectCount: 0,
+        storyDraftCount: 0,
+        storyProcessingCount: 0,
+        storyCompletedCount: 0,
+        storyFailedCount: 0,
+        storyCancelledCount: 0,
+        storySynthesisCount: 0,
+        storyTotalChars: 0
       }
     }, () => {
       // setData 完成后加载数据
@@ -255,6 +335,18 @@ Page({
       // 构建时间范围参数（用于有大数据量集合的时间筛选）
       const timeRange = this.getTimeRangeForCloud()
       console.log('[DatabaseManage] 调用云函数, timeRange:', timeRange)
+
+      // 大范围（近7天/近30天）的 logs / coins：数据量太大，只取统计、不拉列表
+      if (this.shouldUseStatsOnly(targetCollection)) {
+        await this.loadStatsOnly(targetCollection, where, timeRange)
+        return
+      }
+
+      // upload_file_logs 选择了某一天：按日期在服务端精确查询
+      if (targetCollection === 'upload_file_logs' && this.data.uploadDateFilter) {
+        await this.loadUploadByDate()
+        return
+      }
 
       wx.showLoading({
         title: '加载中...',
@@ -310,6 +402,13 @@ Page({
             const createdTime = typeof item.created_at === 'number' ? item.created_at : new Date(item.created_at).getTime()
             return createdTime >= range.startTime && createdTime <= range.endTime
           })
+        } else if (timeRange && targetCollection === 'story_audio_projects') {
+          // 过滤 story_audio_projects（按 created_at）
+          rawList = rawList.filter(item => {
+            if (!item.created_at) return false
+            const createdTime = typeof item.created_at === 'number' ? item.created_at : new Date(item.created_at).getTime()
+            return createdTime >= range.startTime && createdTime <= range.endTime
+          })
         }
 
         // 格式化数据（使用 targetCollection），获取扁平化日志列表和扁平化金币列表
@@ -331,7 +430,7 @@ Page({
           : [...this.data.flatCoinsList, ...flatCoins]
 
         // 大数据量集合使用分页，但初始 pageSize 较小避免超限
-        const largeCollections = ['tts_clone_design_logs', 'users', 'coin_transactions', 'upload_file_logs']
+        const largeCollections = ['tts_clone_design_logs', 'users', 'coin_transactions', 'upload_file_logs', 'story_audio_projects']
         // 所有集合都走正常分页逻辑，hasMore 由云函数返回决定
         const hasMore = res.result.data.hasMore
 
@@ -354,15 +453,25 @@ Page({
           flatCoinsList: filteredFlatCoins,
           total: total,
           hasMore: hasMore,
+          statsOnly: false, // 列表模式
           requesting: false, // 请求完成
           loading: false // 关闭 loading 显示
         })
 
         // 计算统计信息
-        if (targetCollection === 'tts_clone_design_logs' || 
-            targetCollection === 'users' || 
-            targetCollection === 'coin_transactions') {
+        if (targetCollection === 'tts_clone_design_logs' ||
+            targetCollection === 'users' ||
+            targetCollection === 'coin_transactions' ||
+            targetCollection === 'story_audio_projects') {
           this.calculateStats(newList)
+        }
+
+        // upload_file_logs：按目录分类汇总并应用当前筛选
+        if (targetCollection === 'upload_file_logs') {
+          this.setData({
+            uploadCategories: this.buildUploadCategories(newList),
+            filteredUploadList: this.filterUploadByCategory(newList, this.data.uploadCategoryFilter)
+          })
         }
       } else {
         this.setData({ 
@@ -390,6 +499,179 @@ Page({
   },
 
   // 格式化数据列表
+  // 从 file_id 中提取目录名（如 cloud://env.bucket/tts/xxx.mp3 -> tts）
+  getUploadCategory(fileId) {
+    if (!fileId) return '未知'
+    let path = String(fileId)
+    if (path.indexOf('cloud://') === 0) {
+      path = path.slice('cloud://'.length)
+      const slash = path.indexOf('/')
+      path = slash >= 0 ? path.slice(slash + 1) : '' // 去掉 env.bucket 主机段
+    }
+    const segs = path.split('/').filter(Boolean)
+    return segs.length > 0 ? segs[0] : '未知'
+  },
+
+  // 汇总各目录数量：[{ key:'all', label:'全部', count }, { key:'tts', ... }]
+  buildUploadCategories(list) {
+    const counts = {}
+    list.forEach(item => {
+      const cat = item.category || this.getUploadCategory(item.file_id)
+      counts[cat] = (counts[cat] || 0) + 1
+    })
+    const cats = Object.keys(counts)
+      .sort()
+      .map(key => ({ key, label: key, count: counts[key] }))
+    return [{ key: 'all', label: '全部', count: list.length }, ...cats]
+  },
+
+  // 按目录分类筛选
+  filterUploadByCategory(list, filterType) {
+    const type = filterType || this.data.uploadCategoryFilter
+    if (type === 'all' || !type) return list
+    return list.filter(item => (item.category || this.getUploadCategory(item.file_id)) === type)
+  },
+
+  // 切换目录分类
+  onUploadCategoryChange(e) {
+    const type = e.currentTarget.dataset.type
+    this.setData({
+      uploadCategoryFilter: type,
+      filteredUploadList: this.filterUploadByCategory(this.data.dataList, type)
+    })
+  },
+
+  // 选择某一天
+  onUploadDateChange(e) {
+    const date = e.detail.value
+    this.setData({
+      uploadDateFilter: date,
+      uploadCategoryFilter: 'all',
+      pageIndex: 0,
+      dataList: []
+    }, () => {
+      this.loadData()
+    })
+  },
+
+  // 清除日期筛选，恢复默认（最近记录）
+  onUploadDateClear() {
+    if (!this.data.uploadDateFilter) return
+    this.setData({
+      uploadDateFilter: '',
+      uploadCategoryFilter: 'all',
+      pageIndex: 0,
+      dataList: []
+    }, () => {
+      this.loadData()
+    })
+  },
+
+  // 按某一天加载 upload_file_logs（服务端精确查询，一次返回当天全部）
+  async loadUploadByDate() {
+    const day = this.data.uploadDateFilter
+    const parts = day.split('-')
+    const start = new Date(parts[0], parts[1] - 1, parts[2]).getTime()
+    const end = start + 24 * 60 * 60 * 1000 - 1
+
+    try {
+      const token = app.getToken()
+      wx.showLoading({ title: '查询中...' })
+      const res = await app.globalData.cloud.callFunction({
+        name: 'managerDatabase',
+        data: {
+          token: token,
+          action: 'upload_by_date',
+          startTime: start,
+          endTime: end
+        }
+      })
+      wx.hideLoading()
+
+      if (res.result.code === 0) {
+        const formatted = (res.result.data.list || []).map(item => ({
+          ...item,
+          formattedTime: this.formatTime(item.date),
+          category: this.getUploadCategory(item.file_id)
+        }))
+        this.setData({
+          dataList: formatted,
+          uploadCategories: this.buildUploadCategories(formatted),
+          filteredUploadList: this.filterUploadByCategory(formatted, 'all'),
+          total: formatted.length,
+          hasMore: false,
+          statsOnly: false,
+          requesting: false,
+          loading: false
+        })
+      } else {
+        this.setData({ requesting: false, loading: false })
+        wx.showToast({ title: res.result.message || '查询失败', icon: 'none' })
+      }
+    } catch (err) {
+      wx.hideLoading()
+      console.error('[DatabaseManage] 按日查询失败:', err)
+      this.setData({ requesting: false, loading: false })
+      wx.showToast({ title: '查询失败，请稍后重试', icon: 'none' })
+    }
+  },
+
+  // 删除一条上传日志（同时删除对应云存储文件）
+  onDeleteUpload(e) {
+    const id = e.currentTarget.dataset.id
+    const fileId = e.currentTarget.dataset.fileId
+    wx.showModal({
+      title: '确认删除',
+      content: '将删除该条上传日志，并删除对应的云存储文件，删除后无法恢复。',
+      confirmText: '删除',
+      confirmColor: '#ff4d4f',
+      success: async (res) => {
+        if (res.confirm) {
+          await this.executeDeleteUpload(id, fileId)
+        }
+      }
+    })
+  },
+
+  async executeDeleteUpload(id, fileId) {
+    try {
+      const token = app.getToken()
+      wx.showLoading({ title: '删除中...' })
+      const res = await app.globalData.cloud.callFunction({
+        name: 'managerDatabase',
+        data: {
+          token: token,
+          action: 'delete_upload',
+          docId: id,
+          fileId: fileId
+        }
+      })
+      wx.hideLoading()
+
+      if (res.result.code === 0) {
+        // 从本地列表移除该条
+        const dataList = this.data.dataList.filter(item => item._id !== id)
+        this.setData({
+          dataList,
+          uploadCategories: this.buildUploadCategories(dataList),
+          filteredUploadList: this.filterUploadByCategory(dataList, this.data.uploadCategoryFilter),
+          total: Math.max(0, this.data.total - 1)
+        })
+        const fileError = res.result.data && res.result.data.fileError
+        wx.showToast({
+          title: fileError ? '日志已删除（文件删除失败）' : '删除成功',
+          icon: fileError ? 'none' : 'success'
+        })
+      } else {
+        wx.showToast({ title: res.result.message || '删除失败', icon: 'none' })
+      }
+    } catch (err) {
+      wx.hideLoading()
+      console.error('[DatabaseManage] 删除上传记录失败:', err)
+      wx.showToast({ title: '删除失败，请稍后重试', icon: 'none' })
+    }
+  },
+
   formatDataList(list, collection) {
     if (!list || !Array.isArray(list)) return { formattedList: [], flatLogs: [], flatCoins: [] }
 
@@ -435,7 +717,8 @@ Page({
       return {
         formattedList: list.map(item => ({
           ...item,
-          formattedTime: this.formatTime(item.date)
+          formattedTime: this.formatTime(item.date),
+          category: this.getUploadCategory(item.file_id) // 从 file_id 提取目录名
         })),
         flatLogs: [],
         flatCoins: []
@@ -492,6 +775,37 @@ Page({
         flatLogs: [],
         flatCoins: []
       }
+    } else if (collection === 'story_audio_projects') {
+      return {
+        formattedList: list.map(item => {
+          const text = (item.story && item.story.text) || ''
+          const synth = Array.isArray(item.synthesis) ? item.synthesis : []
+          const synthDone = synth.filter(s => s && s.audio_file_id).length
+          const status = String(item.status || '').toLowerCase()
+          const statusLabel = (
+            status === 'draft' ? '草稿' :
+            status === 'processing' ? '生成中' :
+            status === 'completed' || status === 'success' ? '已完成' :
+            status === 'failed' || status === 'error' ? '失败' :
+            status === 'cancelled' || status === 'canceled' ? '已取消' :
+            (item.status || '未知')
+          )
+          return {
+            ...item,
+            created_at_formatted: this.formatTime(item.created_at),
+            updated_at_formatted: this.formatTime(item.updated_at),
+            textExcerpt: text.length > 80 ? text.slice(0, 80) + '…' : text,
+            textLength: text.length,
+            synthesisTotal: synth.length,
+            synthesisDone: synthDone,
+            statusKey: status,
+            statusLabel: statusLabel,
+            hasError: !!item.processing_error
+          }
+        }),
+        flatLogs: [],
+        flatCoins: []
+      }
     } else {
       // 通用格式化：处理常见的时间字段
       const timeFields = ['created_at', 'updated_at', 'date', 'time', 'createTime', 'updateTime']
@@ -542,6 +856,8 @@ Page({
       return { field: 'updated_at', order: 'desc' }
     } else if (collection === 'coin_transactions') {
       return { field: 'updated_at', order: 'desc' }
+    } else if (collection === 'story_audio_projects') {
+      return { field: 'created_at', order: 'desc' }
     } else {
       // 默认按 _id 降序
       return { field: '_id', order: 'desc' }
@@ -611,7 +927,8 @@ Page({
 
     try {
       const token = app.getToken()
-      const { _id, _openid, ...updateData } = this.data.editData
+      // 剔除仅用于展示的派生字段，避免写回数据库
+      const { _id, _openid, formattedTime, category, updated_at_formatted, ...updateData } = this.data.editData
       wx.showLoading({ title: '保存中...' })
       const res = await app.globalData.cloud.callFunction({
         name: 'managerDatabase',
@@ -846,7 +1163,7 @@ Page({
     const collection = this.data.currentCollection
     
     // 只有大数据量集合才传递时间范围参数
-    const largeCollections = ['tts_clone_design_logs', 'users', 'coin_transactions', 'upload_file_logs']
+    const largeCollections = ['tts_clone_design_logs', 'users', 'coin_transactions', 'upload_file_logs', 'story_audio_projects']
     if (!largeCollections.includes(collection)) {
       return null
     }
@@ -975,6 +1292,102 @@ Page({
     })
   },
 
+  // 是否走「仅统计」模式：大范围（近7/30天）的 logs / coins / storyAudio 数据量太大，只取统计不拉列表
+  shouldUseStatsOnly(collection) {
+    const statsCollections = ['tts_clone_design_logs', 'coin_transactions', 'story_audio_projects']
+    const bigRanges = ['last7days', 'last30days']
+    return statsCollections.includes(collection) && bigRanges.includes(this.data.timeFilterType)
+  },
+
+  // 根据统计数字计算成本信息（logs 用）
+  // Mimo 克隆/设计 免费；只对 Qwen 克隆/设计计费。若未传入按 provider 拆分的字段，
+  // 兜底用总数（向后兼容老的统计结果）。
+  buildCostInfo(s) {
+    const cloneCount = Number(s.cloneCount) || 0
+    const designCount = Number(s.designCount) || 0
+    const cloneCountQwen = s.cloneCountQwen != null ? Number(s.cloneCountQwen) : cloneCount
+    const designCountQwen = s.designCountQwen != null ? Number(s.designCountQwen) : designCount
+    const qwenChars = Number(s.qwenChars) || 0
+    const cloneCost = cloneCountQwen * 0.01
+    const designCost = designCountQwen * 0.2
+    const qwenSynthCost = qwenChars / 10000 * 2
+    const totalCost = cloneCost + designCost + qwenSynthCost
+    return {
+      cloneCost: cloneCost.toFixed(2),
+      designCost: designCost.toFixed(2),
+      qwenSynthCost: qwenSynthCost.toFixed(2),
+      totalCost: totalCost.toFixed(2)
+    }
+  },
+
+  // 仅统计：调用云函数在服务端聚合，只拿统计数字，不拉列表
+  async loadStatsOnly(targetCollection, where, timeRange) {
+    try {
+      const token = app.getToken()
+      wx.showLoading({ title: '统计中...' })
+
+      const res = await app.globalData.cloud.callFunction({
+        name: 'managerDatabase',
+        data: {
+          token: token,
+          action: 'stats',
+          collection: targetCollection,
+          where: where || {},
+          timeRange: timeRange
+        }
+      })
+      wx.hideLoading()
+
+      if (res.result.code === 0) {
+        const s = res.result.data.stats || {}
+        this.setData({
+          statsOnly: true,
+          dataList: [],
+          allFlatLogsList: [],
+          flatLogsList: [],
+          allFlatCoinsList: [],
+          flatCoinsList: [],
+          total: 0,
+          hasMore: false,
+          requesting: false,
+          loading: false,
+          stats: {
+            cloneCount: s.cloneCount || 0,
+            designCount: s.designCount || 0,
+            cloneCountMimo: s.cloneCountMimo || 0,
+            cloneCountQwen: s.cloneCountQwen || 0,
+            designCountMimo: s.designCountMimo || 0,
+            designCountQwen: s.designCountQwen || 0,
+            mimoChars: s.mimoChars || 0,
+            qwenChars: s.qwenChars || 0,
+            newUsersCount: s.newUsersCount || 0,
+            signCount: s.signCount || 0,
+            adCount: s.adCount || 0,
+            rechargeAmount: (Number(s.rechargeAmount) || 0).toFixed(2),
+            storyProjectCount: s.storyProjectCount || 0,
+            storyDraftCount: s.storyDraftCount || 0,
+            storyProcessingCount: s.storyProcessingCount || 0,
+            storyCompletedCount: s.storyCompletedCount || 0,
+            storyFailedCount: s.storyFailedCount || 0,
+            storyCancelledCount: s.storyCancelledCount || 0,
+            storySynthesisCount: s.storySynthesisCount || 0,
+            storyTotalChars: s.storyTotalChars || 0
+          },
+          costInfo: this.buildCostInfo(s),
+          statsPeriodText: this.getStatsPeriodText()
+        })
+      } else {
+        this.setData({ requesting: false, loading: false })
+        wx.showToast({ title: res.result.message || '统计失败', icon: 'none' })
+      }
+    } catch (err) {
+      wx.hideLoading()
+      console.error('[DatabaseManage] 统计失败:', err)
+      this.setData({ requesting: false, loading: false })
+      wx.showToast({ title: '统计失败，请稍后重试', icon: 'none' })
+    }
+  },
+
   // 计算统计数据
   calculateStats(dataList) {
     const timeRange = this.getTimeRange()
@@ -985,6 +1398,10 @@ Page({
     if (collection === 'tts_clone_design_logs') {
       let cloneCount = 0
       let designCount = 0
+      let cloneCountMimo = 0
+      let cloneCountQwen = 0
+      let designCountMimo = 0
+      let designCountQwen = 0
       let mimoChars = 0
       let qwenChars = 0
 
@@ -993,6 +1410,7 @@ Page({
       flatLogs.forEach(log => {
         const logTime = log.created_at
         const logType = log.type || ''
+        const isMimo = String(log.provider || '').toLowerCase() === 'mimo'
 
         let inTimeRange = false
         if (logTime) {
@@ -1003,8 +1421,10 @@ Page({
         if (inTimeRange) {
           if (logType === 'clone') {
             cloneCount++
+            if (isMimo) cloneCountMimo++; else cloneCountQwen++
           } else if (logType === 'design') {
             designCount++
+            if (isMimo) designCountMimo++; else designCountQwen++
           } else if (logType === 'synthesize_mimo') {
             const text = log.text || ''
             if (text) {
@@ -1023,13 +1443,19 @@ Page({
         stats: {
           cloneCount,
           designCount,
+          cloneCountMimo,
+          cloneCountQwen,
+          designCountMimo,
+          designCountQwen,
           mimoChars,
           qwenChars,
           newUsersCount: 0,
           signCount: 0,
           adCount: 0,
-          orderCount: 0
+          rechargeAmount: 0
         },
+        // 成本：Qwen 克隆 0.01元/次、设计 0.2元/次、合成 2元/万字；Mimo 免费
+        costInfo: this.buildCostInfo({ cloneCount, designCount, cloneCountQwen, designCountQwen, qwenChars }),
         statsPeriodText: this.getStatsPeriodText()
       })
     } else if (collection === 'users') {
@@ -1054,20 +1480,19 @@ Page({
           newUsersCount,
           signCount: 0,
           adCount: 0,
-          orderCount: 0
+          rechargeAmount: 0
         },
         statsPeriodText: this.getStatsPeriodText()
       })
     } else if (collection === 'coin_transactions') {
       let signCount = 0
       let adCount = 0
-      let orderCount = 0
+      let rechargeAmount = 0 // 充值/购买交易的实付金额之和（单位：元，由元宝换算）
 
       // 使用扁平化列表统计，避免因分页导致嵌套结构中部分文档未被加载而漏算
       const flatCoins = this.data.allFlatCoinsList || []
       flatCoins.forEach(trans => {
         const transTime = trans.created_at
-        const transType = trans.type || ''
         const source = trans.source || ''
 
         let inTimeRange = false
@@ -1077,17 +1502,14 @@ Page({
         }
 
         if (inTimeRange) {
-          // earn 类型：签到、看视频广告
-          if (transType === 'earn') {
-            if (source === 'checkin') {
-              signCount++
-            } else if (source === 'video_ad') {
-              adCount++
-            }
-          }
-          // recharge 类型：充值购买
-          else if (transType === 'recharge' && source === 'recharge') {
-            orderCount++
+          // 按 source 区分（与列表筛选 filterCoinsByType 保持一致：充值/消费/签到/广告均以 source 判定）
+          if (source === 'checkin') {
+            signCount++
+          } else if (source === 'video_ad') {
+            adCount++
+          } else if (source === 'recharge') {
+            // 充值/购买交易 —— 将元宝换算为实付人民币后累加
+            rechargeAmount += rechargeCoinsToRmb(trans.amount)
           }
         }
       })
@@ -1101,7 +1523,59 @@ Page({
           newUsersCount: 0,
           signCount,
           adCount,
-          orderCount
+          rechargeAmount: rechargeAmount.toFixed(2)
+        },
+        statsPeriodText: this.getStatsPeriodText()
+      })
+    } else if (collection === 'story_audio_projects') {
+      let storyProjectCount = 0
+      let storyDraftCount = 0
+      let storyProcessingCount = 0
+      let storyCompletedCount = 0
+      let storyFailedCount = 0
+      let storyCancelledCount = 0
+      let storySynthesisCount = 0
+      let storyTotalChars = 0
+
+      dataList.forEach(item => {
+        const createdAt = item.created_at
+        if (!createdAt) return
+        const t = typeof createdAt === 'number' ? createdAt : new Date(createdAt).getTime()
+        if (t < startTime || t > endTime) return
+
+        storyProjectCount++
+        const status = String(item.status || '').toLowerCase()
+        if (status === 'draft') storyDraftCount++
+        else if (status === 'processing') storyProcessingCount++
+        else if (status === 'completed' || status === 'success') storyCompletedCount++
+        else if (status === 'failed' || status === 'error') storyFailedCount++
+        else if (status === 'cancelled' || status === 'canceled') storyCancelledCount++
+
+        if (Array.isArray(item.synthesis)) {
+          storySynthesisCount += item.synthesis.filter(s => s && s.audio_file_id).length
+        }
+        const text = (item.story && item.story.text) || ''
+        if (typeof text === 'string') storyTotalChars += text.length
+      })
+
+      this.setData({
+        stats: {
+          cloneCount: 0,
+          designCount: 0,
+          mimoChars: 0,
+          qwenChars: 0,
+          newUsersCount: 0,
+          signCount: 0,
+          adCount: 0,
+          rechargeAmount: 0,
+          storyProjectCount,
+          storyDraftCount,
+          storyProcessingCount,
+          storyCompletedCount,
+          storyFailedCount,
+          storyCancelledCount,
+          storySynthesisCount,
+          storyTotalChars
         },
         statsPeriodText: this.getStatsPeriodText()
       })

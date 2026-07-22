@@ -20,7 +20,7 @@
         </view>
       </view>
       <view class="header-buttons">
-        <button class="batch-mode-btn {{batchMode ? 'batch-mode-active' : ''}}" bindtap="toggleBatchMode" wx:if="{{!loading}}">
+        <button class="batch-mode-btn {{batchMode ? 'batch-mode-active' : ''}}" bindtap="toggleBatchMode" wx:if="{{!loading && (currentListTab !== 'suggest' || batchMode)}}">
           {{batchMode ? '取消' : '选择'}}
         </button>
         <button class="refresh-btn" bindtap="onRefresh" loading="{{loading}}" wx:if="{{!batchMode}}">
@@ -47,9 +47,14 @@
         建议清理
         <text class="suggest-badge" wx:if="{{suggestDeleteCount > 0}}">{{suggestDeleteCount}}</text>
       </view>
-      <button class="suggest-clean-btn" catchtap="onSuggestBatchDelete" wx:if="{{currentListTab === 'suggest' && suggestDeleteCount > 0 && !batchMode}}" size="mini">
-        一键清理
-      </button>
+      <view class="suggest-actions" wx:if="{{currentListTab === 'suggest' && suggestDeleteCount > 0 && !batchMode}}">
+        <button class="suggest-select-btn" catchtap="toggleBatchMode" size="mini">
+          选择删除
+        </button>
+        <button class="suggest-clean-btn" catchtap="onSuggestBatchDelete" size="mini">
+          一键清理
+        </button>
+      </view>
     </view>
 
     <!-- 账号选项卡 -->
@@ -59,7 +64,7 @@
         bindtap="switchAccount"
         data-account="all"
       >
-        全部 ({{currentListTab === 'suggest' ? suggestDeleteCount : voiceList.length}})
+        全部 ({{currentListTab === 'suggest' ? suggestDeleteCount : totalCount}})
       </view>
       <view
         class="account-tab {{currentAccount === 'main' ? 'account-tab-active' : ''}}"
@@ -99,7 +104,7 @@
   <!-- 统计信息 -->
   <view class="stats-card" wx:if="{{currentType}}">
     <view class="stat-item">
-      <text class="stat-value">{{voiceList.length}}</text>
+      <text class="stat-value">{{displayCount}}</text>
       <text class="stat-label">{{currentListTab === 'suggest' ? '建议清理' : (currentType === 'clone' ? '声音克隆' : '声音设计')}}总数</text>
     </view>
     <view class="stat-divider"></view>
@@ -111,7 +116,7 @@
 
   <!-- 建议清理说明 -->
   <view class="suggest-hint" wx:if="{{currentListTab === 'suggest' && !loading}}">
-    <text class="suggest-hint-text">以下音色未保存且超过20天未使用，建议清理</text>
+    <text class="suggest-hint-text">以下音色未保存且最近30天未使用，建议清理</text>
   </view>
 
   <!-- 音色列表 -->
@@ -148,6 +153,34 @@
       <view class="voice-footer voice-last-used" wx:if="{{item.last_used_time}}">
         <text class="voice-time">最近使用: {{item.last_used_time}}</text>
       </view>
+
+      <!-- 声音设计建议清理：播放预览 + 上传到测试音色库 -->
+      <view class="voice-design-actions" wx:if="{{!batchMode && currentListTab === 'suggest' && currentType === 'design' && item.creation_log}}">
+        <view class="design-action-row" wx:if="{{item.creation_log.preview_audio_file_id}}">
+          <text class="design-action-label">音频:</text>
+          <text class="design-play-link" catchtap="onPlayAudio" data-audio-id="{{item.creation_log.preview_audio_file_id}}">
+            {{currentPlayingAudioId === item.creation_log.preview_audio_file_id ? '⏸ 停止播放' : '▶ 播放并复制链接'}}
+          </text>
+        </view>
+        <view class="design-action-row">
+          <text class="design-action-label"></text>
+          <text class="design-uploaded-tag" wx:if="{{item.isUploaded}}">✓ 已上传</text>
+          <text
+            class="design-upload-link"
+            wx:else
+            catchtap="onUploadVoice"
+            data-voice-id="{{item.voice}}"
+            data-voice-name="{{item.creation_log.voice_name}}"
+            data-voice-prompt="{{item.creation_log.voice_prompt}}"
+            data-used-api-key="{{item.creation_log.used_api_key}}"
+            data-preview-text="{{item.creation_log.preview_text}}"
+            data-preview-audio-file-id="{{item.creation_log.preview_audio_file_id}}"
+            data-language="{{item.creation_log.language}}"
+            data-target-model="{{item.creation_log.target_model}}"
+            data-type="{{item.creation_log.creation_type || 'design'}}">⬆ 上传到测试音色库</text>
+        </view>
+      </view>
+
       <view class="voice-users" wx:if="{{item.user_info && !batchMode}}">
         <view class="user-info-row">
           <text class="user-label">{{item.user_info.type === 'saved' ? '保存者' : '创建者'}} OpenID:</text>
@@ -167,11 +200,17 @@
     </view>
   </view>
 
+  <!-- 列表底部加载提示 -->
+  <view class="load-more" wx:if="{{voiceList.length > 0}}">
+    <text wx:if="{{hasMore}}">上拉加载更多 · 已显示 {{voiceList.length}}/{{displayCount}}</text>
+    <text wx:else>已全部加载 · 共 {{displayCount}} 个</text>
+  </view>
+
   <!-- 空状态 -->
   <view class="empty-state" wx:if="{{currentType && !loading && voiceList.length === 0}}">
     <view class="empty-icon">🎙️</view>
     <text class="empty-text">{{currentListTab === 'suggest' ? '无需清理' : '暂无音色'}}</text>
-    <text class="empty-tip">{{currentListTab === 'suggest' ? '没有未保存且超过20天未使用的音色' : '您还没有创建任何音色'}}</text>
+    <text class="empty-tip">{{currentListTab === 'suggest' ? '没有未保存且最近30天未使用的音色' : '您还没有创建任何音色'}}</text>
   </view>
 
   <!-- 未选择类型提示 -->

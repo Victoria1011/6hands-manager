@@ -10,6 +10,9 @@
       <view class="user-item">
         <text class="user-label">注册时间：</text>
         <text class="user-value">{{userInfo.registerTime || ''}}</text>
+        <view class="device-tag" wx:if="{{userInfo.deviceBrand}}" bindtap="onShowDeviceInfo">
+          <text>📱 {{userInfo.deviceBrand}}</text>
+        </view>
       </view>
       <view class="user-item">
         <text class="user-label">元宝数量：</text>
@@ -66,7 +69,7 @@
       wx:if="{{activeTab === 'chat'}}"
       class="message-scroll"
       scroll-y
-      scroll-into-view="{{scrollToBottom ? 'last-message' : ''}}"
+      scroll-into-view="{{scrollIntoView}}"
       scroll-with-animation
     >
     <!-- 刷新按钮 -->
@@ -85,11 +88,11 @@
       <text class="empty-text">暂无消息</text>
     </view>
 
-    <view 
-      wx:for="{{messages}}" 
+    <view
+      wx:for="{{messages}}"
       wx:key="created_at"
       wx:for-item="message"
-      id="{{index === messages.length - 1 ? 'last-message' : ''}}"
+      id="msg-{{index}}"
       class="message-item {{message.type === 'customer_to_user' || message.sending ? 'self' : 'other'}}"
     >
       <image 
@@ -452,6 +455,22 @@
           <text class="action-text">购买元宝</text>
         </view>
       </view>
+    </view>
+  </view>
+
+  <!-- 设备信息弹窗 -->
+  <view class="device-modal-mask" wx:if="{{showDeviceModal}}" bindtap="onCloseDeviceInfo">
+    <view class="device-modal" catchtap="stopPropagation">
+      <view class="device-modal-header">
+        <text class="device-modal-title">设备信息</text>
+        <text class="device-modal-close" bindtap="onCloseDeviceInfo">×</text>
+      </view>
+      <scroll-view scroll-y class="device-modal-body">
+        <view class="device-row" wx:for="{{deviceInfoList}}" wx:key="key">
+          <text class="device-row-key">{{item.key}}</text>
+          <text class="device-row-value copy-text" bindtap="onCopyText" data-text="{{item.value}}">{{item.value}}</text>
+        </view>
+      </scroll-view>
     </view>
   </view>
 </view>

@@ -199,29 +199,71 @@ Page({
   },
 
   // 根据当前条件过滤并渲染列表
+  // 当前 tab=「建议清理」时，直接用云端预计算的 suggest_delete_list（已按账号过滤）
+  // 当前 tab=「全部」时：
+  //   - currentAccount='all' → 合并三个账号已加载列表
+  //   - currentAccount=具体账号 → 仅该账号已加载列表
   applyFilterAndRender() {
-    const { allVoiceList, suggestDeleteList, currentAccount, currentListTab } = this.data
+    const { currentAccount, currentListTab } = this.data
+    const suggestDeleteList = this._cachedSuggestDeleteList || []
+    const suggestDeleteStats = this._cachedSuggestDeleteStats || { main: 0, v: 0, w: 0 }
+    const suggestDeleteCount = this._cachedSuggestDeleteCount || 0
+    const accountStats = this._cachedAccountStats || { main: 0, v: 0, w: 0 }
 
-    // 选择数据源
-    let sourceList = currentListTab === 'suggest' ? suggestDeleteList : allVoiceList
+    if (currentListTab === 'suggest') {
+      const filteredList = currentAccount === 'all'
+        ? suggestDeleteList
+        : suggestDeleteList.filter(v => v.account_type === currentAccount)
 
-    // 按账号过滤
-    let filteredList = sourceList
-    if (currentAccount !== 'all') {
-      filteredList = sourceList.filter(voice => voice.account_type === currentAccount)
+      this.setData({
+        savedVoiceCount: 0, // 建议清理列表中不含已保存音色
+        displayCount: filteredList.length,
+        // suggestDeleteCount / suggestDeleteStats 在切账号时需展示对应账号的数量
+        suggestDeleteCount: currentAccount === 'all'
+          ? suggestDeleteCount
+          : (suggestDeleteStats[currentAccount] || 0),
+        suggestDeleteStats
+      })
+      this.renderFilteredList(filteredList)
+      return
     }
 
-    const savedVoiceCount = (currentListTab === 'all'
-      ? filteredList
-      : [] // 建议清理列表中没有已保存的
-    ).filter(voice => voice.user_info && voice.user_info.type === 'saved').length
+    // tab='all'
+    let filteredList = []
+    if (currentAccount === 'all') {
+      // 合并三个账号已加载列表，按 gmt_create 升序排序（与云端排序一致）
+      filteredList = []
+        .concat(this._accountLoaded.main || [], this._accountLoaded.v || [], this._accountLoaded.w || [])
+        .sort((a, b) => {
+          const ta = a.gmt_create ? new Date(String(a.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
+          const tb = b.gmt_create ? new Date(String(b.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
+          return ta - tb
+        })
+    } else {
+      filteredList = (this._accountLoaded[currentAccount] || []).slice()
+    }
+
+    // 已保存音色数量：使用云端全量统计，避免分页加载导致本地统计偏少
+    // （savedVoiceCount 由 loadVoiceList 在首页时一次性写入；切账号/标签时不重算）
+    // 这里不再覆盖，保留 loadVoiceList 中设置的值
 
     this.setData({
-      savedVoiceCount: savedVoiceCount,
-      displayCount: filteredList.length // 总数立即写入，不受懒加载窗口影响
+      displayCount: this._computeDisplayCount(currentAccount, accountStats, suggestDeleteStats)
     })
-
     this.renderFilteredList(filteredList)
+  },
+
+  // 计算当前条件下应展示的音色总数（不受已加载页数影响，使用云端统计）
+  _computeDisplayCount(currentAccount, accountStats, suggestDeleteStats) {
+    if (this.data.currentListTab === 'suggest') {
+      // 建议清理 tab 下，displayCount 已在 applyFilterAndRender 中按账号设置
+      return this.data.displayCount
+    }
+    // 全部 tab：用云端账号统计
+    if (currentAccount === 'all') {
+      return (accountStats.main || 0) + (accountStats.v || 0) + (accountStats.w || 0)
+    }
+    return accountStats[currentAccount] || 0
   },
 
   // 检查是否已登录
@@ -272,181 +314,326 @@ Page({
     return Date.parse(String(value).replace(' ', 'T'))
   },
 
-  // 加载音色列表
+  // 加载音色列表（云端分页协议）
+  //
+  // 为规避云函数单次返回 1MB 限制（errCode -501000）：
+  //   - 「全部」标签下：按账号分页拉取（每个账号维护独立游标），UI 合并展示
+  //   - 「建议清理」标签下：直接使用云端预计算的 suggest_delete_list（一次性返回，体积可控）
+  //   - 统计信息 / 建议清理列表只在「首次拉取」时返回，避免每页重复传输
   async loadVoiceList() {
     if (this.data.loading) return
     this.setData({ loading: true })
 
     try {
       const token = app.getToken()
-      console.log('[VoiceManage] 开始获取音色列表，类型:', this.data.currentType)
+      const voiceType = this.data.currentType
+      console.log('[VoiceManage] 开始获取音色列表，类型:', voiceType)
 
-      const res = await app.globalData.cloud.callFunction({
-        name: 'managerVoiceManage',
-        data: {
-          token: token,
-          action: 'list',
-          voice_type: this.data.currentType
+      // 重置分页游标（首次拉取）
+      this._accountPageCursor = { main: 0, v: 0, w: 0 }
+      this._accountHasMore = { main: true, v: true, w: true }
+      this._accountLoaded = { main: [], v: [], w: [] }
+      this._statsLoaded = false
+
+      // 拉取首页：按账号分别拉第一页（避免合并分页与后续按账号分页不一致），
+      // 同时只在第一个账号的请求中带 include_suggest=true 以获取统计与建议清理。
+      // design 类型每条记录附带 creation_log（含 voice_prompt/preview_text 等大字段），
+      // 用更小的页大小确保单次响应不超 1MB。
+      const FIRST_PAGE_SIZE = voiceType === 'design' ? 80 : 200
+      const ACCOUNTS = ['main', 'v', 'w']
+      const responses = await Promise.all(
+        ACCOUNTS.map((acc, idx) => {
+          return this._callListFunction({
+            token,
+            voice_type: voiceType,
+            page_index: 0,
+            page_size: FIRST_PAGE_SIZE,
+            account_type: acc,
+            include_suggest: idx === 0 // 仅 main 账号请求中带统计/建议清理
+          }).catch(err => {
+            console.error(`[VoiceManage] 账号 ${acc} 首页拉取失败:`, err)
+            return { _error: err, _account: acc }
+          })
+        })
+      )
+
+      // 解析每个账号的首页结果
+      const accountStats = { main: 0, v: 0, w: 0 }
+      const failedAccounts = []
+      let suggestDeleteList = []
+      let suggestDeleteCount = 0
+      let suggestDeleteStats = { main: 0, v: 0, w: 0 }
+      let savedVoiceCount = 0
+      let incompleteAccounts = []
+      let suggestTruncated = false
+
+      ACCOUNTS.forEach((acc, idx) => {
+        const res = responses[idx]
+        if (res && res._error) {
+          failedAccounts.push(acc)
+          // 失败的账号视为无更多数据
+          this._accountHasMore[acc] = false
+          return
+        }
+        const result = res && res.result
+        if (!result || result.code !== 0) {
+          console.error(`[VoiceManage] 账号 ${acc} 返回异常:`, result)
+          failedAccounts.push(acc)
+          this._accountHasMore[acc] = false
+          return
+        }
+        const data = result.data || {}
+        const list = (data.voice_list || []).map(v => ({
+          ...v,
+          last_used_time: v.last_used_time ? this.formatTime(v.last_used_time) : null
+        }))
+        this._accountLoaded[acc] = list
+        this._accountPageCursor[acc] = 1 // 已拉取第 0 页
+        this._accountHasMore[acc] = !!data.has_more
+        accountStats[acc] = (data.account_stats && data.account_stats[acc]) != null
+          ? data.account_stats[acc]
+          : list.length
+
+        // 仅 main 账号响应中包含统计/建议清理
+        if (idx === 0) {
+          suggestDeleteList = (data.suggest_delete_list || []).map(v => ({
+            ...v,
+            last_used_time: v.last_used_time ? this.formatTime(v.last_used_time) : null
+          }))
+          suggestDeleteCount = data.suggest_delete_count != null ? data.suggest_delete_count : suggestDeleteList.length
+          suggestDeleteStats = data.suggest_delete_stats || { main: 0, v: 0, w: 0 }
+          savedVoiceCount = data.saved_voice_count || 0
+          incompleteAccounts = data.incomplete_accounts || []
+          suggestTruncated = !!data.suggest_delete_truncated
         }
       })
 
-      if (res.result.code === 0) {
-        const allVoiceList = (res.result.data.voice_list || []).map(voice => ({
-          ...voice,
-          last_used_time: voice.last_used_time ? this.formatTime(voice.last_used_time) : null
-        }))
-        allVoiceList.sort((a, b) => {
-          const timeA = a.gmt_create ? new Date(String(a.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
-          const timeB = b.gmt_create ? new Date(String(b.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
-          return timeA - timeB
+      const totalCount = (accountStats.main || 0) + (accountStats.v || 0) + (accountStats.w || 0)
+      this._hasMoreAll = this._accountHasMore.main || this._accountHasMore.v || this._accountHasMore.w
+      this._statsLoaded = true
+      this._cachedAccountStats = accountStats
+      this._cachedSuggestDeleteList = suggestDeleteList
+      this._cachedSuggestDeleteCount = suggestDeleteCount
+      this._cachedSuggestDeleteStats = suggestDeleteStats
+
+      this.setData({
+        accountStats,
+        totalCount,
+        savedVoiceCount,
+        suggestDeleteList,
+        suggestDeleteCount,
+        suggestDeleteStats,
+        loading: false
+      })
+
+      this.applyFilterAndRender()
+
+      // 失败账号提示
+      if (failedAccounts.length > 0) {
+        const accs = failedAccounts.map(a => this.data.accountNames[a] || a).join('、')
+        wx.showModal({
+          title: '部分账号拉取失败',
+          content: `${accs} 的音色拉取失败（可能数据量过大或网络超时），当前数量可能偏少。请点击「刷新」重试。`,
+          showCancel: false,
+          confirmText: '知道了'
         })
-        const accountStats = res.result.data.account_stats || { main: 0, v: 0, w: 0 }
-        console.log('[VoiceManage] 获取音色数量:', allVoiceList.length)
-
-        // 计算建议删除列表
-        const suggestData = this._computeSuggestDelete(allVoiceList)
-
-        // 选择数据源
-        let sourceList = this.data.currentListTab === 'suggest' ? suggestData.list : allVoiceList
-
-        // 按账号过滤
-        let filteredList = sourceList
-        if (this.data.currentAccount !== 'all') {
-          filteredList = sourceList.filter(voice => voice.account_type === this.data.currentAccount)
-        }
-
-        const savedVoiceCount = filteredList.filter(voice => voice.user_info && voice.user_info.type === 'saved').length
-        const totalCount = (accountStats.main || 0) + (accountStats.v || 0) + (accountStats.w || 0)
-
-        this.setData({
-          allVoiceList: allVoiceList,
-          savedVoiceCount: savedVoiceCount,
-          displayCount: filteredList.length,
-          totalCount: totalCount,
-          accountStats: accountStats,
-          loading: false,
-          suggestDeleteList: suggestData.list,
-          suggestDeleteCount: suggestData.count,
-          suggestDeleteStats: suggestData.stats
+      } else if (incompleteAccounts.length > 0) {
+        const accs = incompleteAccounts
+          .map(a => this.data.accountNames[a] || a)
+          .join('、')
+        wx.showModal({
+          title: '数量可能不完整',
+          content: `${accs} 的音色未全部获取成功（可能被限流或网络超时），当前数量可能偏少。请点击「刷新」重试。`,
+          showCancel: false,
+          confirmText: '知道了'
         })
-
-        this.renderFilteredList(filteredList)
-
-        // 若部分账号数据拉取不完整，明确提示用户数量可能偏少，可下拉/点击刷新重试
-        if (res.result.data.incomplete) {
-          const accs = (res.result.data.incomplete_accounts || [])
-            .map(a => this.data.accountNames[a] || a)
-            .join('、')
-          wx.showModal({
-            title: '数量可能不完整',
-            content: `${accs} 的音色未全部获取成功（可能被限流或网络超时），当前数量可能偏少。请点击「刷新」重试。`,
-            showCancel: false,
-            confirmText: '知道了'
-          })
-        }
-      } else {
-        wx.showToast({ title: res.result.message || '查询失败', icon: 'none' })
-        this.setData({ loading: false })
+      } else if (suggestTruncated) {
+        // 建议清理列表被截断：提示用户
+        wx.showModal({
+          title: '建议清理列表已截断',
+          content: `建议清理的音色数量过多（共 ${suggestDeleteCount} 个），列表仅显示前 ${suggestDeleteList.length} 个。可先清理当前列表后再刷新查看剩余。`,
+          showCancel: false,
+          confirmText: '知道了'
+        })
       }
     } catch (err) {
       console.error('[VoiceManage] 查询失败:', err)
-      wx.showToast({ title: '查询失败，请稍后重试', icon: 'none' })
+      const errMsg = String((err && err.errMsg) || err || '')
+      if (errMsg.indexOf('-501000') !== -1 || errMsg.indexOf('exceeded') !== -1) {
+        wx.showModal({
+          title: '数据量过大',
+          content: '音色数量过多，单次返回超过限制。请点击「刷新」重试，系统会按账号分页拉取。',
+          showCancel: false,
+          confirmText: '知道了'
+        })
+      } else {
+        wx.showToast({ title: '查询失败，请稍后重试', icon: 'none' })
+      }
       this.setData({ loading: false })
     }
   },
 
-  // 纯函数：计算建议删除的音色列表（未保存 且 最近 30 天未使用，含从未使用过）
-  _computeSuggestDelete(allVoiceList) {
-    const now = Date.now()
-    const DAY_MS = 24 * 60 * 60 * 1000
-    const THRESHOLD_DAYS = 30
-
-    let savedCount = 0
-    let systemCount = 0    // 系统/预置音色：排除
-    let recentCount = 0    // 最近30天内有活动（使用过或新建），排除
-    let oldUnusedCount = 0 // 超过30天未使用且创建已超过30天，建议删除
-    let unknownCount = 0   // 既无使用时间也无创建时间，无法判断，保守排除
-
-    const suggestList = allVoiceList.filter((voice) => {
-      // 已保存的音色：排除
-      if (voice.user_info && voice.user_info.type === 'saved') {
-        savedCount++
-        return false
-      }
-
-      // 系统/预置音色（speakers_test 中）：永远不应建议清理
-      if (voice.user_info && voice.user_info.type === 'system') {
-        systemCount++
-        return false
-      }
-
-      // 参考时间：优先用最近使用时间；从未使用过则退回创建时间(gmt_create)，
-      // 避免把刚创建、尚未使用（也未关联到用户/使用记录）的新音色误判为建议清理。
-      const lastUsedTime = this._parseVoiceTime(voice.last_used_time)
-      const createTime = this._parseVoiceTime(voice.gmt_create)
-      const refTime = !isNaN(lastUsedTime) ? lastUsedTime : createTime
-
-      // 完全无法判断时间：保守起见不建议删除
-      if (isNaN(refTime)) {
-        unknownCount++
-        return false
-      }
-
-      const daysDiff = (now - refTime) / DAY_MS
-      if (daysDiff > THRESHOLD_DAYS) {
-        oldUnusedCount++
-        return true
-      }
-      recentCount++
-      return false
+  // 调用云函数 list action 的统一封装
+  _callListFunction(params) {
+    return app.globalData.cloud.callFunction({
+      name: 'managerVoiceManage',
+      data: Object.assign({
+        token: app.getToken(),
+        action: 'list'
+      }, params)
+    }).catch(err => {
+      console.error('[VoiceManage] list 调用失败:', err)
+      throw err
     })
-
-    console.log('[VoiceManage] ===== 建议删除统计 =====')
-    console.log('[VoiceManage] 已保存(排除):', savedCount)
-    console.log('[VoiceManage] 系统/预置(排除):', systemCount)
-    console.log('[VoiceManage] 超过30天未使用/未活动(建议删除):', oldUnusedCount)
-    console.log('[VoiceManage] 30天内有活动(排除):', recentCount)
-    console.log('[VoiceManage] 无法判断时间(排除):', unknownCount)
-    console.log('[VoiceManage] 建议删除总计:', suggestList.length)
-    console.log('[VoiceManage] =========================')
-
-    const stats = { main: 0, v: 0, w: 0 }
-    suggestList.forEach(v => {
-      if (v.account_type && stats.hasOwnProperty(v.account_type)) {
-        stats[v.account_type]++
-      }
-    })
-
-    return { list: suggestList, count: suggestList.length, stats }
   },
+
+  // 建议删除的音色列表现由云端预计算返回（见 loadVoiceList 中的 suggest_delete_list），
+  // 不再在前端本地计算，避免需要拉取全量数据导致单次响应超过 1MB 限制。
 
   // 懒加载：完整过滤结果存在 this._filteredList（不进 data，避免大数组反复传给视图层），
   // data.voiceList 只保留已渲染的窗口。首屏只渲染第一页，其余下滑到底再追加。
   renderFilteredList(filteredList) {
     this._filteredList = filteredList || []
     const firstPage = this._filteredList.slice(0, PAGE_SIZE)
+    const hasMoreLocal = this._filteredList.length > firstPage.length
     this.setData({
       voiceList: firstPage,
-      hasMore: this._filteredList.length > firstPage.length
+      // hasMore 含义：本地还有未渲染的 OR 云端还有未拉取的下一页
+      hasMore: hasMoreLocal || this._hasMoreRemote()
     })
     // 切换账号/标签后回到顶部，避免停留在上一个列表的滚动位置
     wx.pageScrollTo({ scrollTop: 0, duration: 0 })
   },
 
-  // 追加渲染下一页
-  loadMore() {
-    if (!this.data.hasMore) return
+  // 当前条件下云端是否还有未拉取的下一页
+  _hasMoreRemote() {
+    if (this.data.currentListTab === 'suggest') return false // 建议清理一次性返回
+    const acc = this.data.currentAccount
+    if (acc === 'all') return !!this._hasMoreAll
+    return !!(this._accountHasMore && this._accountHasMore[acc])
+  },
+
+  // 追加渲染下一页：先消耗本地已加载但未渲染的数据；
+  // 本地用尽且云端还有更多时，触发云端分页拉取
+  async loadMore() {
+    if (this.data.loading) return
+
     const filteredList = this._filteredList || []
     const current = this.data.voiceList.length
-    const next = filteredList.slice(current, current + PAGE_SIZE)
-    if (next.length === 0) {
-      this.setData({ hasMore: false })
+
+    // 本地还有未渲染的：直接追加
+    if (filteredList.length > current) {
+      const next = filteredList.slice(current, current + PAGE_SIZE)
+      const hasMoreLocal = current + next.length < filteredList.length
+      this.setData({
+        voiceList: this.data.voiceList.concat(next),
+        hasMore: hasMoreLocal || this._hasMoreRemote()
+      })
       return
     }
-    this.setData({
-      voiceList: this.data.voiceList.concat(next),
-      hasMore: current + next.length < filteredList.length
-    })
+
+    // 本地已渲染完毕，但云端还有更多：触发云端拉取下一页
+    if (this._hasMoreRemote()) {
+      await this._loadNextPageFromCloud()
+    } else {
+      this.setData({ hasMore: false })
+    }
+  },
+
+  // 从云端拉取当前账号的下一页
+  async _loadNextPageFromCloud() {
+    if (this.data.loading) return
+    this.setData({ loading: true })
+
+    try {
+      const acc = this.data.currentAccount
+      const voiceType = this.data.currentType
+      const token = app.getToken()
+      const PAGE_SIZE = voiceType === 'design' ? 80 : 200
+
+      if (acc === 'all') {
+        // 「全部」账号：并发为所有还有更多的账号拉取下一页
+        const accounts = ['main', 'v', 'w'].filter(a => this._accountHasMore[a])
+        if (accounts.length === 0) {
+          this._hasMoreAll = false
+          this.setData({ loading: false, hasMore: false })
+          return
+        }
+        const responses = await Promise.all(
+          accounts.map(a => {
+            const pageIndex = this._accountPageCursor[a]
+            return this._callListFunction({
+              token,
+              voice_type: voiceType,
+              page_index: pageIndex,
+              page_size: PAGE_SIZE,
+              account_type: a,
+              include_suggest: false
+            }).catch(err => {
+              console.error(`[VoiceManage] 账号 ${a} 第 ${pageIndex + 1} 页拉取失败:`, err)
+              return { _error: err, _account: a }
+            })
+          })
+        )
+        responses.forEach((res, i) => {
+          const a = accounts[i]
+          if (res && res._error) {
+            this._accountHasMore[a] = false
+            return
+          }
+          const result = res && res.result
+          if (!result || result.code !== 0) {
+            this._accountHasMore[a] = false
+            return
+          }
+          const list = (result.data && result.data.voice_list) || []
+          const mapped = list.map(v => ({
+            ...v,
+            last_used_time: v.last_used_time ? this.formatTime(v.last_used_time) : null
+          }))
+          this._accountLoaded[a] = (this._accountLoaded[a] || []).concat(mapped)
+          this._accountPageCursor[a] = (this._accountPageCursor[a] || 0) + 1
+          this._accountHasMore[a] = !!(result.data && result.data.has_more)
+        })
+        this._hasMoreAll = this._accountHasMore.main || this._accountHasMore.v || this._accountHasMore.w
+      } else {
+        // 具体账号分页
+        const pageIndex = this._accountPageCursor[acc] || 0
+        const res = await this._callListFunction({
+          token,
+          voice_type: voiceType,
+          page_index: pageIndex,
+          page_size: PAGE_SIZE,
+          account_type: acc,
+          include_suggest: false
+        })
+        if (res && res.result && res.result.code === 0) {
+          const list = (res.result.data && res.result.data.voice_list) || []
+          const mapped = list.map(v => ({
+            ...v,
+            last_used_time: v.last_used_time ? this.formatTime(v.last_used_time) : null
+          }))
+          this._accountLoaded[acc] = (this._accountLoaded[acc] || []).concat(mapped)
+          this._accountPageCursor[acc] = pageIndex + 1
+          this._accountHasMore[acc] = !!(res.result.data && res.result.data.has_more)
+        } else {
+          this._accountHasMore[acc] = false
+        }
+      }
+
+      this.setData({ loading: false })
+      // 重新应用过滤并渲染（已包含追加的数据）
+      this.applyFilterAndRender()
+    } catch (err) {
+      console.error('[VoiceManage] 加载下一页失败:', err)
+      this.setData({ loading: false })
+      const errMsg = String((err && err.errMsg) || err || '')
+      if (errMsg.indexOf('-501000') !== -1 || errMsg.indexOf('exceeded') !== -1) {
+        wx.showToast({ title: '数据量过大，请缩小单次范围', icon: 'none' })
+      } else {
+        wx.showToast({ title: '加载失败', icon: 'none' })
+      }
+    }
   },
 
   // 切换音色类型
@@ -455,6 +642,7 @@ Page({
     if (type === this.data.currentType) return
 
     this._filteredList = []
+    this._resetPagingState()
     this.setData({
       currentType: type,
       voiceList: [],
@@ -478,6 +666,7 @@ Page({
   onRefresh() {
     if (!this.data.currentType) return
     this._filteredList = []
+    this._resetPagingState()
     this.setData({
       voiceList: [],
       allVoiceList: [],
@@ -492,6 +681,81 @@ Page({
       selectedCount: 0
     })
     this.loadVoiceList()
+  },
+
+  // 重置分页相关内部状态
+  _resetPagingState() {
+    this._accountPageCursor = { main: 0, v: 0, w: 0 }
+    this._accountHasMore = { main: true, v: true, w: true }
+    this._accountLoaded = { main: [], v: [], w: [] }
+    this._hasMoreAll = false
+    this._statsLoaded = false
+    this._cachedAccountStats = { main: 0, v: 0, w: 0 }
+    this._cachedSuggestDeleteList = []
+    this._cachedSuggestDeleteCount = 0
+    this._cachedSuggestDeleteStats = { main: 0, v: 0, w: 0 }
+  },
+
+  // 删除成功后本地移除已删除项 + 同步统计，避免重新拉取列表（提升体验）
+  // @param {Array<string>} deletedVoices - 已成功删除的 voice id 列表
+  // @param {Array<Object>} deletedItems - 已删除项的完整对象（用于获取 account_type 等）
+  _removeDeletedVoicesLocally(deletedVoices, deletedItems) {
+    if (!deletedVoices || deletedVoices.length === 0) return
+    const deletedSet = new Set(deletedVoices)
+
+    // 1. 从各账号已加载列表中移除
+    const ACCOUNTS = ['main', 'v', 'w']
+    const removedByAccount = { main: 0, v: 0, w: 0 }
+    ACCOUNTS.forEach(acc => {
+      const before = (this._accountLoaded[acc] || []).length
+      this._accountLoaded[acc] = (this._accountLoaded[acc] || []).filter(v => !deletedSet.has(v.voice))
+      removedByAccount[acc] = before - this._accountLoaded[acc].length
+    })
+
+    // 2. 从建议清理缓存中移除
+    this._cachedSuggestDeleteList = (this._cachedSuggestDeleteList || []).filter(v => !deletedSet.has(v.voice))
+
+    // 3. 更新账号统计（accountStats）- 各账号减少对应数量
+    const accountStats = Object.assign({}, this._cachedAccountStats || { main: 0, v: 0, w: 0 })
+    ACCOUNTS.forEach(acc => {
+      accountStats[acc] = Math.max(0, (accountStats[acc] || 0) - removedByAccount[acc])
+    })
+    this._cachedAccountStats = accountStats
+
+    // 4. 更新建议清理统计（按账号重新统计，更准确）
+    const suggestDeleteStats = Object.assign({}, this._cachedSuggestDeleteStats || { main: 0, v: 0, w: 0 })
+    ACCOUNTS.forEach(acc => {
+      suggestDeleteStats[acc] = (this._cachedSuggestDeleteList || []).filter(v => v.account_type === acc).length
+    })
+    this._cachedSuggestDeleteStats = suggestDeleteStats
+    this._cachedSuggestDeleteCount = this._cachedSuggestDeleteList.length
+
+    // 5. 计算新的 totalCount 与 savedVoiceCount
+    const totalCount = (accountStats.main || 0) + (accountStats.v || 0) + (accountStats.w || 0)
+    // savedVoiceCount：从已加载列表中重算（已加载列表中 type=saved 的数量）
+    // 注意：分页场景下本地 savedVoiceCount 可能比云端全量少，但删除后只需递减（如果删的是 saved）
+    // 这里简单处理：保留原值，仅当删除的项是 saved 时递减
+    let savedVoiceCount = this.data.savedVoiceCount || 0
+    ;(deletedItems || []).forEach(item => {
+      if (item.user_info && item.user_info.type === 'saved') {
+        savedVoiceCount = Math.max(0, savedVoiceCount - 1)
+      }
+    })
+
+    // 6. 同步 data（WXML 中 accountStats / suggestDeleteStats / suggestDeleteCount / totalCount 等）
+    this.setData({
+      accountStats,
+      suggestDeleteStats,
+      suggestDeleteCount: this._cachedSuggestDeleteCount,
+      suggestDeleteList: this._cachedSuggestDeleteList,
+      totalCount,
+      savedVoiceCount
+    })
+
+    // 7. 重新应用过滤并渲染（自动从更新后的 _accountLoaded / _cachedSuggestDeleteList 切片）
+    this.applyFilterAndRender()
+
+    console.log('[VoiceManage] 本地移除已删除项:', deletedVoices.length, '个，账号统计:', accountStats, '建议清理统计:', suggestDeleteStats)
   },
 
   // 复制音色名称
@@ -557,7 +821,8 @@ Page({
 
       if (res.result.code === 0) {
         wx.showToast({ title: '删除成功', icon: 'success' })
-        await this.loadVoiceList()
+        // 本地移除已删除项，避免重新拉取列表（提升体验）
+        this._removeDeletedVoicesLocally([voice], [{ voice, account_type: accountType }])
       } else {
         wx.showToast({ title: res.result.message || '删除失败', icon: 'none' })
       }
@@ -636,13 +901,17 @@ Page({
 
     let successCount = 0
     let failCount = 0
+    const deletedVoices = [] // 已成功删除的 voice id
+    const deletedItems = [] // 已成功删除的完整项（含 account_type / user_info）
 
     const voicesToDelete = sourceList
       .filter(voice => selectedVoices[voice.voice] && (!voice.user_info || voice.user_info.type !== 'saved'))
       .map(voice => ({
         voice: voice.voice,
         creatorOpenid: voice.user_info ? voice.user_info.openid : '',
-        accountType: voice.account_type || 'main'
+        accountType: voice.account_type || 'main',
+        // 保留完整对象用于本地移除时获取 account_type / user_info
+        _raw: voice
       }))
 
     for (const item of voicesToDelete) {
@@ -661,6 +930,8 @@ Page({
 
         if (res.result.code === 0) {
           successCount++
+          deletedVoices.push(item.voice)
+          deletedItems.push(item._raw)
         } else {
           failCount++
           console.error('[VoiceManage] 删除音色失败:', item.voice, res.result.message)
@@ -684,12 +955,19 @@ Page({
     }
 
     this.setData({ batchMode: false, selectedVoices: {}, selectedCount: 0 })
-    await this.loadVoiceList()
+    // 本地移除已成功删除的项，避免重新拉取列表
+    if (deletedVoices.length > 0) {
+      this._removeDeletedVoicesLocally(deletedVoices, deletedItems)
+    }
   },
 
   // 一键清理建议删除的音色
   onSuggestBatchDelete() {
-    const count = this.data.suggestDeleteCount
+    // 按当前账号过滤后的建议清理数量
+    const acc = this.data.currentAccount
+    const count = acc === 'all'
+      ? this.data.suggestDeleteCount
+      : (this.data.suggestDeleteStats[acc] || 0)
     if (count === 0) return
 
     wx.showModal({
@@ -706,12 +984,19 @@ Page({
   },
 
   // 执行建议列表批量删除
+  // 根据当前账号过滤：currentAccount='all' 删全部，否则只删该账号的建议清理音色
   async executeSuggestBatchDelete() {
-    const suggestList = this.data.suggestDeleteList
+    const allSuggestList = this.data.suggestDeleteList
+    const acc = this.data.currentAccount
+    const suggestList = acc === 'all'
+      ? allSuggestList
+      : allSuggestList.filter(v => v.account_type === acc)
     const token = app.getToken()
 
     let successCount = 0
     let failCount = 0
+    const deletedVoices = []
+    const deletedItems = []
 
     wx.showLoading({ title: '批量删除中...' })
 
@@ -731,6 +1016,8 @@ Page({
 
         if (res.result.code === 0) {
           successCount++
+          deletedVoices.push(item.voice)
+          deletedItems.push(item)
         } else {
           failCount++
           console.error('[VoiceManage] 删除音色失败:', item.voice, res.result.message)
@@ -753,7 +1040,13 @@ Page({
       })
     }
 
+    // 切回「全部」标签，并本地移除已成功删除的项
     this.setData({ currentListTab: 'all' })
-    await this.loadVoiceList()
+    if (deletedVoices.length > 0) {
+      this._removeDeletedVoicesLocally(deletedVoices, deletedItems)
+    } else {
+      // 没有成功删除的项时，仍需重新应用过滤以反映 currentListTab 变化
+      this.applyFilterAndRender()
+    }
   }
 })

@@ -198,19 +198,53 @@ async function listVoicesForAccount(accountType, voiceType = 'clone') {
 
 /**
  * 查询所有账号的音色列表
+ *
+ * 为规避云函数单次响应 1MB 限制（errCode -501000），返回策略调整：
+ *   - 不再一次性返回全部音色；改为云端预计算「统计信息 + 建议清理列表」，
+ *     并对主列表做分页（page_index / page_size）。
+ *   - 建议清理列表通常远小于全量（仅"未保存且 30 天未使用"的音色），
+ *     故可整体返回；前端无需再本地计算。
+ *
  * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)，默认 clone
- * @returns {Promise<Object>} 音色列表
+ * @param {Object} [opts] - 分页与过滤参数
+ * @param {Number} [opts.page_index=0] - 主列表页码（从 0 开始）
+ * @param {Number} [opts.page_size=200] - 主列表每页条数
+ * @param {String} [opts.account_type] - 仅返回指定账号（'main'/'v'/'w'），不传则全部
+ * @param {Boolean} [opts.include_suggest=true] - 是否返回建议清理列表（仅第一页需要）
+ * @returns {Promise<Object>} 音色列表（分页）+ 统计 + 建议清理
  */
-async function listVoices(voiceType = 'clone') {
-  console.log('[VoiceManage] 查询所有账号音色列表，voice_type:', voiceType)
+async function listVoices(voiceType = 'clone', opts = {}) {
+  const pageIndex = Math.max(0, parseInt(opts.page_index, 10) || 0)
+  const pageSize = Math.max(1, Math.min(500, parseInt(opts.page_size, 10) || 200))
+  const accountFilter = opts.account_type
+  const includeSuggest = opts.include_suggest !== false
+  console.log('[VoiceManage] 查询音色列表，voice_type:', voiceType, 'page:', pageIndex, 'size:', pageSize, 'account:', accountFilter || 'all', 'include_suggest:', includeSuggest)
 
   try {
-    // 并发查询3个账号的全部音色列表（每个账号内部自动循环分页）
-    const [mainRes, vRes, wRes] = await Promise.all([
-      listVoicesForAccount('main', voiceType),
-      listVoicesForAccount('v', voiceType),
-      listVoicesForAccount('w', voiceType)
-    ])
+    const ACCOUNT_KEYS = ['main', 'v', 'w']
+
+    // 重要：当 include_suggest=true 时（首页请求），云端需要全部 3 个账号的音色来计算
+    // 建议清理列表与统计信息（前端只在 main 账号请求时带 include_suggest=true，
+    // 但建议清理列表应覆盖所有账号，否则切到 v/w 账号时按 account_type 过滤会为空）。
+    // 此时 accountFilter 只作用于主列表分页切片，不影响建议清理与统计的计算范围。
+    const fetchAccounts = includeSuggest ? ACCOUNT_KEYS : (
+      (accountFilter && ACCOUNT_KEYS.includes(accountFilter)) ? [accountFilter] : ACCOUNT_KEYS
+    )
+
+    // 并发查询目标账号的全部音色列表（每个账号内部自动循环分页）
+    const accountResults = await Promise.all(
+      fetchAccounts.map(acc => listVoicesForAccount(acc, voiceType))
+    )
+    const accountMap = {}
+    fetchAccounts.forEach((acc, i) => { accountMap[acc] = accountResults[i] })
+
+    // 对未查询的账号，列表置空、complete=true（避免被误判为"不完整"）
+    ACCOUNT_KEYS.forEach(acc => {
+      if (!accountMap[acc]) accountMap[acc] = { list: [], complete: true }
+    })
+    const mainRes = accountMap.main
+    const vRes = accountMap.v
+    const wRes = accountMap.w
     const mainList = mainRes.list
     const vList = vRes.list
     const wList = wRes.list
@@ -404,46 +438,161 @@ async function listVoices(voiceType = 'clone') {
 
     // 为每个音色添加用户信息和最近使用时间
     // 注意：此处不再对每个音色单独打 log（音色多时会严重拖慢云函数并产生大量日志）
-    const enhancedVoiceList = allVoiceList.map(voice => {
+    //
+    // 字段白名单策略：只返回前端实际用到的字段（voice/target_model/gmt_create 等），
+    // 避免阿里云 API 原始返回中其他字段（如 resource_link/description 等）被原样回传，
+    // 在音色数量较多时导致单次响应超过云函数 1MB 限制（errCode -501000）。
+    //
+    // creation_log 字段（含 voice_prompt / preview_text 等大字段）仅用于
+    // 「声音设计」类型下「建议清理」列表的「播放预览/上传到测试音色库」功能
+    // （见 voice-manage.wxml 中的条件：currentType === 'design' && item.creation_log）。
+    // 声音克隆类型完全不需要该字段，进一步减小响应体积。
+    const includeCreationLog = voiceType === 'design'
+    const buildEnhancedVoice = (voice) => {
       const voiceId = voice.voice
-      // 创建日志字段（去掉内部排序 _ts）
+      // 用户信息：仅保留前端实际用到的字段（openid/voice_name/type/source）
+      const ui = voiceUserMap[voiceId]
+      const userInfo = ui ? {
+        openid: ui.openid || '',
+        voice_name: ui.voice_name || '',
+        type: ui.type || ''
+      } : null
+      // 去掉 source（仅云函数内部用于区分 system_speakers/upload_speakers，前端不消费）
+
+      // 创建日志字段（去掉内部排序 _ts，仅 design 类型附带）
       let creationLog = null
-      const cl = voiceCreationLogMap[voiceId]
-      if (cl) {
-        creationLog = {
-          voice_name: cl.voice_name,
-          voice_prompt: cl.voice_prompt,
-          used_api_key: cl.used_api_key,
-          preview_text: cl.preview_text,
-          preview_audio_file_id: cl.preview_audio_file_id,
-          language: cl.language,
-          target_model: cl.target_model,
-          creation_type: cl.creation_type
+      if (includeCreationLog) {
+        const cl = voiceCreationLogMap[voiceId]
+        if (cl) {
+          creationLog = {
+            voice_name: cl.voice_name,
+            voice_prompt: cl.voice_prompt,
+            used_api_key: cl.used_api_key,
+            preview_text: cl.preview_text,
+            preview_audio_file_id: cl.preview_audio_file_id,
+            language: cl.language,
+            target_model: cl.target_model,
+            creation_type: cl.creation_type
+          }
         }
       }
+
+      // 字段白名单：剔除阿里云 API 中前端不消费的多余字段，显著减小响应体积
       return {
-        ...voice,
-        voice_type: voiceType, // 添加音色类型
-        user_info: voiceUserMap[voiceId] || null, // 用户信息 {openid, voice_name, type: 'saved'|'creator'}，无则为 null
-        last_used_time: voiceLastUsedTimeMap[voiceId] || null, // 最近使用该音色进行语音合成的时间，无则为 null
-        creation_log: creationLog // 用于"上传到测试音色库"/播放预览，来自 clone/design 创建日志
+        voice: voice.voice,
+        gmt_create: voice.gmt_create || null,
+        target_model: voice.target_model || '',
+        account_type: voice.account_type,
+        voice_type: voiceType,
+        user_info: userInfo,
+        last_used_time: voiceLastUsedTimeMap[voiceId] || null,
+        creation_log: creationLog
       }
+    }
+
+    // 全量增强后的列表（仅用于排序、分页切片、建议清理计算，不整体返回）
+    const enhancedVoiceList = allVoiceList.map(buildEnhancedVoice)
+
+    // 保持前端原有排序：按 gmt_create 升序（兼容 "YYYY-MM-DD HH:mm:ss" 字符串与 iOS）
+    enhancedVoiceList.sort((a, b) => {
+      const ta = a.gmt_create ? new Date(String(a.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
+      const tb = b.gmt_create ? new Date(String(b.gmt_create).replace(' ', 'T')).getTime() || 0 : 0
+      return ta - tb
     })
 
-    // 按账号分组统计
+    // 按账号分组统计（不依赖当前 accountFilter，始终返回全部账号数量）
     const accountStats = {
       main: mainList.length,
       v: vList.length,
       w: wList.length
     }
 
+    // 云端计算建议清理列表（逻辑与前端 _computeSuggestDelete 一致）：
+    // 未保存（非 saved/system） 且 最近 30 天未使用（参考时间：last_used_time 优先，回退 gmt_create）
+    // 既无 last_used_time 也无 gmt_create 的保守排除
+    const DAY_MS = 24 * 60 * 60 * 1000
+    const THRESHOLD_DAYS = 30
+    const now = Date.now()
+    const parseTime = (v) => {
+      if (!v && v !== 0) return NaN
+      if (typeof v === 'number') return v
+      return Date.parse(String(v).replace(' ', 'T'))
+    }
+
+    const suggestDeleteList = []
+    const suggestDeleteStats = { main: 0, v: 0, w: 0 }
+    for (const voice of enhancedVoiceList) {
+      const ui = voice.user_info
+      // 已保存的音色：排除
+      if (ui && ui.type === 'saved') continue
+      // 系统/预置音色：永远不应建议清理
+      if (ui && ui.type === 'system') continue
+
+      const lastUsedTime = parseTime(voice.last_used_time)
+      const createTime = parseTime(voice.gmt_create)
+      const refTime = !isNaN(lastUsedTime) ? lastUsedTime : createTime
+      // 完全无法判断时间：保守起见不建议删除
+      if (isNaN(refTime)) continue
+
+      const daysDiff = (now - refTime) / DAY_MS
+      if (daysDiff > THRESHOLD_DAYS) {
+        suggestDeleteList.push(voice)
+        if (voice.account_type && suggestDeleteStats.hasOwnProperty(voice.account_type)) {
+          suggestDeleteStats[voice.account_type]++
+        }
+      }
+    }
+
+    // 建议清理列表体积保护：design 类型每个 creation_log 含 voice_prompt/preview_text 等大字段，
+    // 当列表较大时整体返回仍可能超 1MB。这里限制 design 类型建议清理列表上限，
+    // 超出部分前端可后续按账号拉取（include_suggest=false 时不返回，避免重复）。
+    const SUGGEST_LIST_LIMIT = voiceType === 'design' ? 300 : 1000
+    let suggestListReturned = suggestDeleteList
+    let suggestListTruncated = false
+    if (suggestDeleteList.length > SUGGEST_LIST_LIMIT) {
+      suggestListReturned = suggestDeleteList.slice(0, SUGGEST_LIST_LIMIT)
+      suggestListTruncated = true
+      console.warn('[VoiceManage] 建议清理列表数量超过上限', SUGGEST_LIST_LIMIT, '，已截断；总数仍返回完整值')
+    }
+    console.log('[VoiceManage] 建议清理数量:', suggestDeleteList.length, '统计:', JSON.stringify(suggestDeleteStats))
+
+    // 主列表分页：按 accountFilter 过滤后再切片（确保前端按账号分页一致）
+    // 当 include_suggest=true 但 account_type=main 时，建议清理/统计基于全量，
+    // 但主列表只返回 main 账号的分页（前端按账号分别拉取首页）
+    let pageSourceList = enhancedVoiceList
+    if (accountFilter && ACCOUNT_KEYS.includes(accountFilter)) {
+      pageSourceList = enhancedVoiceList.filter(v => v.account_type === accountFilter)
+    }
+    const total = pageSourceList.length
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
+    const start = pageIndex * pageSize
+    const pageList = pageSourceList.slice(start, start + pageSize)
+    const hasMore = start + pageList.length < total
+
+    // 已保存音色数量（全量统计，不限于当前 accountFilter）
+    const savedVoiceCount = enhancedVoiceList.filter(v => v.user_info && v.user_info.type === 'saved').length
+
+    console.log('[VoiceManage] 主列表分页: account=', accountFilter || 'all', 'page', pageIndex, '/', totalPages - 1, '本页', pageList.length, '/该账号总', total, 'hasMore', hasMore)
+
     return {
       code: 0,
       message: 'success',
       data: {
-        voice_list: enhancedVoiceList,
+        voice_list: pageList, // 当前页音色（分页）
         voice_type: voiceType,
         account_stats: accountStats,
+        // 分页元信息
+        page_index: pageIndex,
+        page_size: pageSize,
+        total: total, // 主列表总数（按 accountFilter 过滤后；未指定 accountFilter 时为全部账号合计）
+        has_more: hasMore, // 是否还有下一页
+        // 统计与建议清理（仅第一页或 include_suggest=true 时返回，避免每页重复传输）
+        saved_voice_count: savedVoiceCount,
+        suggest_delete_list: includeSuggest ? suggestListReturned : undefined,
+        suggest_delete_count: includeSuggest ? suggestDeleteList.length : undefined, // 完整数量（不受截断影响）
+        suggest_delete_stats: includeSuggest ? suggestDeleteStats : undefined,
+        suggest_delete_truncated: includeSuggest ? suggestListTruncated : undefined, // 建议清理列表是否被截断
+        // 数据完整性提示
         incomplete: incomplete, // 是否有账号数据不完整（数量可能偏少）
         incomplete_accounts: incompleteAccounts // 不完整的账号列表
       }
@@ -765,8 +914,14 @@ exports.main = async (event, context) => {
 
     switch (action) {
       case 'list':
-        // 查询音色列表（获取全部数据）
-        result = await listVoices(voice_type)
+        // 查询音色列表（分页返回，规避单次响应 1MB 限制）
+        // 支持参数：page_index / page_size / account_type / include_suggest
+        result = await listVoices(voice_type, {
+          page_index: event.page_index,
+          page_size: event.page_size,
+          account_type: event.account_type,
+          include_suggest: event.include_suggest
+        })
         break
 
       case 'delete':

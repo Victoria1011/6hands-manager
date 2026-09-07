@@ -849,7 +849,7 @@ Page({
 
     // 特定集合使用特定字段排序
     if (collection === 'upload_file_logs') {
-      return { field: 'date', order: 'desc' }
+      return { field: 'date', order: 'asc' }
     } else if (collection === 'users') {
       return { field: 'created_at', order: 'desc' }
     } else if (collection === 'tts_clone_design_logs') {

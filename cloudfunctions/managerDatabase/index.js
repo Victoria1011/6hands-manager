@@ -333,7 +333,7 @@ async function queryUploadFilesByDate(startTime, endTime) {
 
   while (pageIndex < MAX_BATCHES) {
     const res = await db.collection('upload_file_logs')
-      .orderBy('date', 'desc')
+      .orderBy('date', 'asc')
       .skip(pageIndex * BATCH)
       .limit(BATCH)
       .get()
@@ -346,9 +346,9 @@ async function queryUploadFilesByDate(startTime, endTime) {
       if (ts >= start && ts <= end) matched.push(doc)
     }
 
-    // date 倒序：本批最后一条已早于当天起点，则后续都更早，提前结束
+    // date 升序：本批最后一条已晚于当天终点，则后续都更晚，提前结束
     const lastTs = toTimestamp(docs[docs.length - 1].date)
-    if (lastTs > 0 && lastTs < start) break
+    if (lastTs > 0 && lastTs > end) break
     if (docs.length < BATCH) break
     pageIndex++
   }

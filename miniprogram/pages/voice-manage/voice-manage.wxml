@@ -224,4 +224,32 @@
   <view class="loading-state" wx:if="{{loading && voiceList.length === 0}}">
     <text class="loading-text">加载中...</text>
   </view>
+
+  <!-- 批量删除进度弹窗 -->
+  <view class="dp-mask" wx:if="{{deleteProgress.visible}}" catchtouchmove="onPreventTouchMove">
+    <view class="dp-panel">
+      <view class="dp-header">
+        <text class="dp-title">批量删除音色</text>
+        <text class="dp-summary">进度 {{deleteProgress.finished}}/{{deleteProgress.total}} · 成功 {{deleteProgress.successCount}} · 失败 {{deleteProgress.failCount}}</text>
+      </view>
+      <view class="dp-bar">
+        <view class="dp-bar-inner {{deleteProgress.failCount > 0 ? 'dp-bar-hasfail' : ''}}" style="width: {{deleteProgress.percent}}%"></view>
+      </view>
+      <view class="dp-current" wx:if="{{deleteProgress.running}}">
+        <text class="dp-current-label">正在删除：</text>
+        <text class="dp-current-name">{{deleteProgress.current}}</text>
+      </view>
+      <scroll-view class="dp-list" scroll-y enhanced show-scrollbar="{{false}}">
+        <view class="dp-item" wx:for="{{deleteProgress.items}}" wx:key="voice">
+          <text class="dp-item-index">{{index + 1}}.</text>
+          <text class="dp-item-name">{{item.voice}}</text>
+          <text class="dp-item-status dp-status-{{item.status}}">{{item.statusText}}</text>
+        </view>
+      </scroll-view>
+      <view class="dp-footer">
+        <text class="dp-tip" wx:if="{{deleteProgress.running}}">删除中，请勿离开本页面...</text>
+        <button class="dp-close-btn" wx:else bindtap="onCloseDeleteProgress">关闭</button>
+      </view>
+    </view>
+  </view>
 </view>

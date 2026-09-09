@@ -25,7 +25,20 @@ Page({
     suggestDeleteList: [], // 建议删除的音色列表
     suggestDeleteCount: 0, // 建议删除数量
     suggestDeleteStats: { main: 0, v: 0, w: 0 }, // 各账号建议删除数量统计
-    currentPlayingAudioId: null // 当前正在播放的音频文件 ID
+    currentPlayingAudioId: null, // 当前正在播放的音频文件 ID
+    // 批量删除进度弹窗
+    deleteProgress: {
+      visible: false,
+      running: false,
+      done: false,
+      total: 0,
+      finished: 0,
+      successCount: 0,
+      failCount: 0,
+      percent: 0,
+      current: '', // 当前正在删除的音色
+      items: [] // [{ voice, status: pending|deleting|success|fail, statusText }]
+    }
   },
 
   onLoad() {
@@ -893,66 +906,24 @@ Page({
 
   // 执行批量删除
   async executeBatchDelete() {
-    wx.showLoading({ title: '删除中...' })
-
     const selectedVoices = this.data.selectedVoices
     const sourceList = this._filteredList || this.data.voiceList
-    const token = app.getToken()
 
-    let successCount = 0
-    let failCount = 0
-    const deletedVoices = [] // 已成功删除的 voice id
-    const deletedItems = [] // 已成功删除的完整项（含 account_type / user_info）
-
-    const voicesToDelete = sourceList
+    const items = sourceList
       .filter(voice => selectedVoices[voice.voice] && (!voice.user_info || voice.user_info.type !== 'saved'))
       .map(voice => ({
         voice: voice.voice,
         creatorOpenid: voice.user_info ? voice.user_info.openid : '',
         accountType: voice.account_type || 'main',
-        // 保留完整对象用于本地移除时获取 account_type / user_info
         _raw: voice
       }))
 
-    for (const item of voicesToDelete) {
-      try {
-        const res = await app.globalData.cloud.callFunction({
-          name: 'managerVoiceManage',
-          data: {
-            token: token,
-            action: 'delete',
-            voice_type: this.data.currentType,
-            voice: item.voice,
-            creator_openid: item.creatorOpenid,
-            account_type: item.accountType
-          }
-        })
-
-        if (res.result.code === 0) {
-          successCount++
-          deletedVoices.push(item.voice)
-          deletedItems.push(item._raw)
-        } else {
-          failCount++
-          console.error('[VoiceManage] 删除音色失败:', item.voice, res.result.message)
-        }
-      } catch (err) {
-        failCount++
-        console.error('[VoiceManage] 删除音色异常:', item.voice, err)
-      }
+    if (items.length === 0) {
+      wx.showToast({ title: '没有可删除的音色', icon: 'none' })
+      return
     }
 
-    wx.hideLoading()
-
-    if (failCount === 0) {
-      wx.showToast({ title: `成功删除 ${successCount} 个音色`, icon: 'success' })
-    } else {
-      wx.showModal({
-        title: '批量删除完成',
-        content: `成功删除 ${successCount} 个音色，失败 ${failCount} 个`,
-        showCancel: false
-      })
-    }
+    const { deletedVoices, deletedItems } = await this._runBatchDelete(items)
 
     this.setData({ batchMode: false, selectedVoices: {}, selectedCount: 0 })
     // 本地移除已成功删除的项，避免重新拉取列表
@@ -991,54 +962,20 @@ Page({
     const suggestList = acc === 'all'
       ? allSuggestList
       : allSuggestList.filter(v => v.account_type === acc)
-    const token = app.getToken()
 
-    let successCount = 0
-    let failCount = 0
-    const deletedVoices = []
-    const deletedItems = []
+    const items = suggestList.map(item => ({
+      voice: item.voice,
+      creatorOpenid: item.user_info ? item.user_info.openid : '',
+      accountType: item.account_type || 'main',
+      _raw: item
+    }))
 
-    wx.showLoading({ title: '批量删除中...' })
-
-    for (const item of suggestList) {
-      try {
-        const res = await app.globalData.cloud.callFunction({
-          name: 'managerVoiceManage',
-          data: {
-            token: token,
-            action: 'delete',
-            voice_type: this.data.currentType,
-            voice: item.voice,
-            creator_openid: item.user_info ? item.user_info.openid : '',
-            account_type: item.account_type || 'main'
-          }
-        })
-
-        if (res.result.code === 0) {
-          successCount++
-          deletedVoices.push(item.voice)
-          deletedItems.push(item)
-        } else {
-          failCount++
-          console.error('[VoiceManage] 删除音色失败:', item.voice, res.result.message)
-        }
-      } catch (err) {
-        failCount++
-        console.error('[VoiceManage] 删除音色异常:', item.voice, err)
-      }
+    if (items.length === 0) {
+      wx.showToast({ title: '没有可删除的音色', icon: 'none' })
+      return
     }
 
-    wx.hideLoading()
-
-    if (failCount === 0) {
-      wx.showToast({ title: `成功删除 ${successCount} 个音色`, icon: 'success' })
-    } else {
-      wx.showModal({
-        title: '批量删除完成',
-        content: `成功删除 ${successCount} 个音色，失败 ${failCount} 个`,
-        showCancel: false
-      })
-    }
+    const { deletedVoices, deletedItems } = await this._runBatchDelete(items)
 
     // 切回「全部」标签，并本地移除已成功删除的项
     this.setData({ currentListTab: 'all' })
@@ -1048,5 +985,101 @@ Page({
       // 没有成功删除的项时，仍需重新应用过滤以反映 currentListTab 变化
       this.applyFilterAndRender()
     }
-  }
+  },
+
+  // 统一的批量删除执行器：展示进度弹窗，逐个调用云函数删除
+  // items: [{ voice, creatorOpenid, accountType, _raw }]
+  async _runBatchDelete(items) {
+    const total = items.length
+    const token = app.getToken()
+
+    this.setData({
+      deleteProgress: {
+        visible: true,
+        running: true,
+        done: false,
+        total,
+        finished: 0,
+        successCount: 0,
+        failCount: 0,
+        percent: 0,
+        current: items[0].voice,
+        items: items.map(item => ({
+          voice: item.voice,
+          status: 'pending',
+          statusText: '等待中'
+        }))
+      }
+    })
+
+    const deletedVoices = [] // 已成功删除的 voice id
+    const deletedItems = [] // 已成功删除的完整项（含 account_type / user_info）
+
+    for (let i = 0; i < total; i++) {
+      const item = items[i]
+
+      this.setData({
+        [`deleteProgress.items[${i}].status`]: 'deleting',
+        [`deleteProgress.items[${i}].statusText`]: '删除中',
+        'deleteProgress.current': item.voice
+      })
+
+      let success = false
+      let message = ''
+
+      try {
+        const res = await app.globalData.cloud.callFunction({
+          name: 'managerVoiceManage',
+          data: {
+            token: token,
+            action: 'delete',
+            voice_type: this.data.currentType,
+            voice: item.voice,
+            creator_openid: item.creatorOpenid,
+            account_type: item.accountType
+          }
+        })
+
+        success = !!(res.result && res.result.code === 0)
+        if (!success) {
+          message = (res.result && res.result.message) || '删除失败'
+          console.error('[VoiceManage] 删除音色失败:', item.voice, message)
+        }
+      } catch (err) {
+        message = '请求异常'
+        console.error('[VoiceManage] 删除音色异常:', item.voice, err)
+      }
+
+      if (success) {
+        deletedVoices.push(item.voice)
+        deletedItems.push(item._raw)
+      }
+
+      const finished = i + 1
+      const successCount = deletedVoices.length
+      const failCount = finished - successCount
+
+      this.setData({
+        [`deleteProgress.items[${i}].status`]: success ? 'success' : 'fail',
+        [`deleteProgress.items[${i}].statusText`]: success ? '已删除' : (message ? `失败·${message}` : '失败'),
+        'deleteProgress.finished': finished,
+        'deleteProgress.successCount': successCount,
+        'deleteProgress.failCount': failCount,
+        'deleteProgress.percent': Math.floor(finished / total * 100),
+        'deleteProgress.running': finished < total,
+        'deleteProgress.done': finished === total,
+        'deleteProgress.current': finished === total ? '' : item.voice
+      })
+    }
+
+    return { deletedVoices, deletedItems, successCount: deletedVoices.length, failCount: total - deletedVoices.length }
+  },
+
+  // 关闭批量删除进度弹窗
+  onCloseDeleteProgress() {
+    this.setData({ 'deleteProgress.visible': false })
+  },
+
+  // 阻止弹窗背后的页面滚动
+  onPreventTouchMove() {}
 })

@@ -94,6 +94,9 @@
       <view class="batch-select-all" bindtap="toggleSelectAll">
         <text class="select-all-text">{{selectedCount > 0 ? '取消选择' : '全选'}}</text>
       </view>
+      <view class="batch-select-ten" bindtap="selectTen">
+        <text class="select-ten-text">+10个</text>
+      </view>
       <text class="batch-count">已选择: {{selectedCount}}</text>
       <button class="batch-delete-btn" bindtap="onBatchDelete" disabled="{{selectedCount === 0}}">
         删除 ({{selectedCount}})

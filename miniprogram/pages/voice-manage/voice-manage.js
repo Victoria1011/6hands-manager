@@ -883,6 +883,27 @@ Page({
     this.setData({ selectedVoices, selectedCount })
   },
 
+  // 快速追加选择 10 个（跳过已选中的，可连点累加：10、20、30...）
+  selectTen() {
+    const list = this._filteredList || this.data.voiceList
+    const selectable = list.filter(v => !v.user_info || v.user_info.type !== 'saved')
+    const unselected = selectable.filter(v => !this.data.selectedVoices[v.voice])
+
+    if (unselected.length === 0) {
+      wx.showToast({ title: '当前列表已全部选中', icon: 'none' })
+      return
+    }
+
+    const batch = unselected.slice(0, 10)
+    const selectedVoices = { ...this.data.selectedVoices }
+    batch.forEach(v => { selectedVoices[v.voice] = true })
+
+    const selectedCount = Object.keys(selectedVoices).filter(key => selectedVoices[key]).length
+    this.setData({ selectedVoices, selectedCount })
+
+    console.log('[VoiceManage] 追加选择:', batch.length, '个，累计已选:', selectedCount)
+  },
+
   // 批量删除
   onBatchDelete() {
     const selectedCount = this.data.selectedCount

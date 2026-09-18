@@ -84,6 +84,19 @@
   color: #1890ff;
 }
 
+.batch-select-ten {
+  padding: 8rpx 16rpx;
+  background: #fff;
+  border-radius: 6rpx;
+  border: 2rpx solid #07c160;
+  margin-left: 16rpx;
+}
+
+.select-ten-text {
+  font-size: 26rpx;
+  color: #07c160;
+}
+
 .batch-count {
   font-size: 26rpx;
   color: #666;

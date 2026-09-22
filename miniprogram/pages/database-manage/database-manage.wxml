@@ -600,51 +600,33 @@
         </view>
       </view>
 
-      <!-- api_key_usage 专用展示 -->
+      <!-- api_key_usage 专用展示（全字段展平，支持编辑） -->
       <view wx:if="{{currentCollection === 'api_key_usage'}}">
-        <view class="data-item apikey-item" wx:for="{{dataList}}" wx:key="_id">
+        <view class="data-item apikey-item" wx:for="{{dataList}}" wx:for-item="doc" wx:for-index="docIndex" wx:key="_id">
           <view class="item-row">
-            <view class="item-index">{{index + 1}}</view>
+            <view class="item-index">{{docIndex + 1}}</view>
             <view class="apikey-item-header">
-              <text class="data-id">ID: {{item._id}}</text>
+              <text class="data-id">ID: {{doc._id}}</text>
             </view>
           </view>
 
           <view class="apikey-item-body">
-            <!-- Clone Usage -->
-            <view class="apikey-section">
-              <view class="apikey-section-title">克隆使用统计</view>
-              <view class="apikey-stats">
-                <view class="apikey-stat">
-                  <text class="apikey-stat-label">key_num:</text>
-                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="clone_usage" data-field="key_num">{{item.clone_usage.key_num || 0}}</text>
-                </view>
-                <view class="apikey-stat">
-                  <text class="apikey-stat-label">key_v_num:</text>
-                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="clone_usage" data-field="key_v_num">{{item.clone_usage.key_v_num || 0}}</text>
-                </view>
-                <view class="apikey-stat">
-                  <text class="apikey-stat-label">key_w_num:</text>
-                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="clone_usage" data-field="key_w_num">{{item.clone_usage.key_w_num || 0}}</text>
-                </view>
-              </view>
-            </view>
-
-            <!-- Design Usage -->
-            <view class="apikey-section">
-              <view class="apikey-section-title">设计使用统计</view>
-              <view class="apikey-stats">
-                <view class="apikey-stat">
-                  <text class="apikey-stat-label">key_num:</text>
-                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="design_usage" data-field="key_num">{{item.design_usage.key_num || 0}}</text>
-                </view>
-                <view class="apikey-stat">
-                  <text class="apikey-stat-label">key_v_num:</text>
-                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="design_usage" data-field="key_v_num">{{item.design_usage.key_v_num || 0}}</text>
-                </view>
-                <view class="apikey-stat">
-                  <text class="apikey-stat-label">key_w_num:</text>
-                  <text class="apikey-stat-value editable-value" bindtap="onEditApiKeyField" data-index="{{index}}" data-usage="design_usage" data-field="key_w_num">{{item.design_usage.key_w_num || 0}}</text>
+            <!-- 按顶层字段分组展示所有嵌套字段 -->
+            <view class="apikey-section" wx:for="{{doc.apiKeyGroups}}" wx:for-item="group" wx:key="key">
+              <view class="apikey-section-title">{{group.title}}</view>
+              <view class="apikey-field-list">
+                <view
+                  class="apikey-field"
+                  wx:for="{{group.fields}}"
+                  wx:for-item="field"
+                  wx:key="path"
+                  bindtap="onEditApiKeyField"
+                  data-index="{{docIndex}}"
+                  data-path="{{field.path}}"
+                  data-type="{{field.type}}"
+                  data-editable="{{field.editable}}">
+                  <text class="apikey-field-path">{{field.label}}</text>
+                  <text class="apikey-field-value apikey-type-{{field.type}} {{field.editable ? 'editable-value' : ''}}">{{field.display}}</text>
                 </view>
               </view>
             </view>
@@ -652,7 +634,7 @@
             <!-- 更新时间 -->
             <view class="apikey-time">
               <text class="apikey-time-label">更新时间:</text>
-              <text class="apikey-time-value">{{item.updated_at_formatted}}</text>
+              <text class="apikey-time-value">{{doc.updated_at_formatted}}</text>
             </view>
           </view>
         </view>
@@ -669,9 +651,16 @@
           <view class="modal-body">
             <view class="edit-field">
               <text class="field-label">{{apiKeyEditLabel}}</text>
+              <!-- 布尔字段：开关切换 -->
+              <view class="apikey-switch-row" wx:if="{{apiKeyEditType === 'boolean'}}">
+                <switch checked="{{apiKeyEditValue}}" bindchange="onApiKeyBooleanChange" color="#1890ff" />
+                <text class="apikey-switch-value">{{apiKeyEditValue ? 'true' : 'false'}}</text>
+              </view>
+              <!-- 数字/字符串字段：输入框 -->
               <input
+                wx:else
                 class="field-input"
-                type="number"
+                type="{{apiKeyEditType === 'number' ? 'digit' : 'text'}}"
                 value="{{apiKeyEditValue}}"
                 bindinput="onApiKeyFieldInput"
               />

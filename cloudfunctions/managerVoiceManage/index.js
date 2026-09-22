@@ -120,7 +120,7 @@ function sendPostRequest(url, data, accountType = 'main') {
 }
 
 /**
- * 查询单个账号的全部音色列表（逐页拉取，按“页”级别重试）
+ * 按模型分页拉取某账号的全部音色（逐页拉取，按“页”级别重试）
  *
  * 关键点：以前的实现一旦某页失败就会从第 0 页重新开始，并在最终失败时
  * 静默返回已拉取的部分数据，导致数量偏少且为整百（如 300/400）。
@@ -128,14 +128,12 @@ function sendPostRequest(url, data, accountType = 'main') {
  * 并标记 complete=false，由上层据此提示“数据不完整”，避免静默返回错误数量。
  *
  * @param {String} accountType - 账号类型：main, v, w
- * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)
- * @returns {Promise<{list: Array, complete: boolean}>} 音色列表与是否完整
+ * @param {String} model - 声音定制模型：qwen-voice-enrollment / qwen-voice-design / voice-enrollment
+ * @param {String} action - 列表操作类型：list（Qwen 系列）或 list_voice（CosyVoice）
+ * @returns {Promise<{list: Array, complete: boolean}>} 原始音色列表与是否完整
  */
-async function listVoicesForAccount(accountType, voiceType = 'clone') {
-  console.log('[VoiceManage] 查询全部音色列表，account:', accountType, 'voice_type:', voiceType)
-
-  // 根据音色类型选择 model
-  const model = voiceType === 'design' ? 'qwen-voice-design' : 'qwen-voice-enrollment'
+async function fetchVoicesByModel(accountType, model, action) {
+  console.log('[VoiceManage] 拉取音色列表，account:', accountType, 'model:', model, 'action:', action)
 
   const pageSize = 100 // 每次请求最多 100 条，减少请求次数
   const MAX_PAGE_RETRIES = 4 // 单页最多重试次数
@@ -144,6 +142,8 @@ async function listVoicesForAccount(accountType, voiceType = 'clone') {
   let allVoices = []
   let pageIndex = 0
   let complete = true
+  let lastErrMsg = null
+  let lastFirstId = null
 
   while (true) {
     let pageVoices = null
@@ -154,19 +154,27 @@ async function listVoicesForAccount(accountType, voiceType = 'clone') {
         const payload = {
           model: model,
           input: {
-            action: 'list',
+            action: action,
             page_index: pageIndex,
             page_size: pageSize
           }
         }
 
         const response = await sendPostRequest(DASHSCOPE_API_URL, payload, accountType)
-        pageVoices = response.output?.voice_list || []
+        // HTTP 200 但返回体是业务错误（如模型未开通/参数错误）时也视为失败，
+        // 避免被静默当作空列表（这正是「某来源列表为空却无任何提示」的隐患）
+        if (response && response.code) {
+          throw new Error(`API 错误 ${response.code}: ${response.message || JSON.stringify(response).slice(0, 200)}`)
+        }
+        if (!response || !response.output) {
+          throw new Error('响应缺少 output 字段: ' + JSON.stringify(response).slice(0, 200))
+        }
+        pageVoices = response.output.voice_list || []
         lastErr = null
         break
       } catch (err) {
         lastErr = err
-        console.error(`[VoiceManage] 账号 ${accountType} 第 ${pageIndex + 1} 页第 ${attempt + 1}/${MAX_PAGE_RETRIES + 1} 次失败:`, err.message)
+        console.error(`[VoiceManage] 账号 ${accountType} ${model} 第 ${pageIndex + 1} 页第 ${attempt + 1}/${MAX_PAGE_RETRIES + 1} 次失败:`, err.message)
         if (attempt < MAX_PAGE_RETRIES) {
           await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1))) // 指数退避
         }
@@ -175,14 +183,19 @@ async function listVoicesForAccount(accountType, voiceType = 'clone') {
 
     // 当前页多次重试仍失败：停止翻页并标记不完整（继续翻页会导致页号错乱、漏数据）
     if (lastErr) {
-      console.error(`[VoiceManage] 账号 ${accountType} 第 ${pageIndex + 1} 页彻底失败，已拉取 ${allVoices.length} 条，标记为数据不完整`)
+      lastErrMsg = lastErr.message || String(lastErr)
+      console.error(`[VoiceManage] 账号 ${accountType} ${model} 第 ${pageIndex + 1} 页彻底失败，已拉取 ${allVoices.length} 条，标记为数据不完整`)
       complete = false
       break
     }
 
-    console.log('[VoiceManage] 账号', accountType, '第', pageIndex + 1, '页，本页数量:', pageVoices.length, '累计:', allVoices.length + pageVoices.length)
+    console.log('[VoiceManage] 账号', accountType, model, '第', pageIndex + 1, '页，本页数量:', pageVoices.length, '累计:', allVoices.length + pageVoices.length)
 
     if (pageVoices.length === 0) break // 没有更多数据了
+    // 防御：若服务端忽略分页参数导致返回重复页，停止翻页避免死循环/重复数据
+    const firstId = pageVoices[0] ? String(pageVoices[0].voice || pageVoices[0].voice_id || '') : ''
+    if (lastFirstId !== null && firstId && firstId === lastFirstId) break
+    lastFirstId = firstId
     allVoices = allVoices.concat(pageVoices)
     if (pageVoices.length < pageSize) break // 本页不足一页，说明已到末尾
 
@@ -192,8 +205,101 @@ async function listVoicesForAccount(accountType, voiceType = 'clone') {
     }
   }
 
-  console.log('[VoiceManage] 账号', accountType, '获取完毕，总数量:', allVoices.length, '完整:', complete)
-  return { list: allVoices, complete }
+  console.log('[VoiceManage] 账号', accountType, model, '获取完毕，总数量:', allVoices.length, '完整:', complete)
+  return { list: allVoices, complete, error: lastErrMsg }
+}
+
+/**
+ * 归一化不同模型的音色字段：
+ * - Qwen 系列（qwen-voice-design / qwen-voice-enrollment）返回 voice 字段；
+ * - CosyVoice（voice-enrollment）返回 voice_id 字段，且列表接口不返回 target_model，
+ *   需从音色名 {target_model}-vd-{prefix}-{唯一标识} 中解析（见声音设计 API 文档）。
+ * @param {Object} raw - API 原始音色项
+ * @param {String} provider - 来源：qwen 或 cosy
+ */
+function normalizeVoiceItem(raw, provider) {
+  if (!raw) return null
+  const voiceId = raw.voice || raw.voice_id || ''
+  if (!voiceId) return null
+
+  let targetModel = raw.target_model || ''
+  if (!targetModel && provider === 'cosy') {
+    const idx = voiceId.indexOf('-vd-')
+    if (idx > 0) targetModel = voiceId.slice(0, idx)
+  }
+
+  return {
+    voice: voiceId,
+    target_model: targetModel,
+    gmt_create: raw.gmt_create || null,
+    gmt_modified: raw.gmt_modified || null,
+    status: raw.status || null,
+    voice_prompt: raw.voice_prompt || '',
+    preview_text: raw.preview_text || '',
+    language: raw.language || '',
+    provider
+  }
+}
+
+/**
+ * 查询单个账号的全部音色列表
+ * - clone：Qwen 声音复刻（qwen-voice-enrollment，action=list）
+ * - design：Qwen 声音设计（qwen-voice-design，action=list）+ Cosy 声音设计
+ *   （voice-enrollment，action=list_voice），两个模型并发拉取后合并
+ *
+ * @param {String} accountType - 账号类型：main, v, w
+ * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)
+ * @returns {Promise<{list: Array, complete: boolean}>} 归一化后的音色列表与是否完整
+ */
+async function listVoicesForAccount(accountType, voiceType = 'clone') {
+  console.log('[VoiceManage] 查询全部音色列表，account:', accountType, 'voice_type:', voiceType)
+
+  if (voiceType === 'design') {
+    const [qwenRes, cosyRes] = await Promise.all([
+      fetchVoicesByModel(accountType, 'qwen-voice-design', 'list'),
+      fetchVoicesByModel(accountType, 'voice-enrollment', 'list_voice')
+    ])
+    const qwenList = qwenRes.list.map(v => normalizeVoiceItem(v, 'qwen')).filter(Boolean)
+    const cosyList = cosyRes.list.map(v => normalizeVoiceItem(v, 'cosy')).filter(Boolean)
+    console.log('[VoiceManage] 账号', accountType, '设计音色合并：Qwen', qwenList.length, '个 + Cosy', cosyList.length, '个')
+    return {
+      list: qwenList.concat(cosyList),
+      complete: qwenRes.complete && cosyRes.complete,
+      providerErrors: {
+        qwen: qwenRes.error || null,
+        cosy: cosyRes.error || null
+      }
+    }
+  }
+
+  const res = await fetchVoicesByModel(accountType, 'qwen-voice-enrollment', 'list')
+  const list = res.list.map(v => normalizeVoiceItem(v, 'qwen')).filter(Boolean)
+  return { list, complete: res.complete, providerErrors: { qwen: res.error || null } }
+}
+
+/**
+ * 更新 api_key_usage 集合中的 clone_usage 字段
+ * key_num / key_v_num / key_w_num 分别对应 main / v / w 账号中声音克隆音色的数量
+ * 集合为单文档设计（见数据库管理页），此处取第一条文档进行点号路径更新
+ * @param {Object} accountStats - { main, v, w } 各账号克隆音色数量
+ */
+async function updateCloneUsage(accountStats) {
+  const res = await db.collection('api_key_usage').limit(1).get()
+  const docs = res.data || []
+  if (docs.length === 0) {
+    console.warn('[VoiceManage] api_key_usage 集合为空，跳过 clone_usage 更新')
+    return
+  }
+
+  const docId = docs[0]._id
+  await db.collection('api_key_usage').doc(docId).update({
+    data: {
+      'clone_usage.key_num': accountStats.main || 0,
+      'clone_usage.key_v_num': accountStats.v || 0,
+      'clone_usage.key_w_num': accountStats.w || 0
+    }
+  })
+  console.log('[VoiceManage] 已更新 api_key_usage.clone_usage:', JSON.stringify(accountStats), 'docId:', docId)
 }
 
 /**
@@ -202,7 +308,7 @@ async function listVoicesForAccount(accountType, voiceType = 'clone') {
  * 为规避云函数单次响应 1MB 限制（errCode -501000），返回策略调整：
  *   - 不再一次性返回全部音色；改为云端预计算「统计信息 + 建议清理列表」，
  *     并对主列表做分页（page_index / page_size）。
- *   - 建议清理列表通常远小于全量（仅"未保存且 30 天未使用"的音色），
+ *   - 建议清理列表通常远小于全量（仅"未保存且 120 天未使用"的音色），
  *     故可整体返回；前端无需再本地计算。
  *
  * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)，默认 clone
@@ -242,6 +348,22 @@ async function listVoices(voiceType = 'clone', opts = {}) {
     ACCOUNT_KEYS.forEach(acc => {
       if (!accountMap[acc]) accountMap[acc] = { list: [], complete: true }
     })
+
+    // 汇总各账号分来源（Qwen/Cosy）的拉取错误，返回给前端提示
+    // （如 Cosy 列表为空时，前端能明确告知是"没有数据"还是"拉取失败"）
+    const providerErrors = {}
+    fetchAccounts.forEach((acc, i) => {
+      const pe = (accountResults[i] && accountResults[i].providerErrors) || {}
+      Object.keys(pe).forEach(p => {
+        if (pe[p]) {
+          if (!providerErrors[p]) providerErrors[p] = {}
+          providerErrors[p][acc] = pe[p]
+        }
+      })
+    })
+    if (Object.keys(providerErrors).length > 0) {
+      console.warn('[VoiceManage] 分来源拉取存在错误:', JSON.stringify(providerErrors))
+    }
     const mainRes = accountMap.main
     const vRes = accountMap.v
     const wRes = accountMap.w
@@ -308,12 +430,14 @@ async function listVoices(voiceType = 'clone', opts = {}) {
     // 用 Set 做 O(1) 查找
     const allVoiceIdSet = new Set(allVoiceList.map(v => v.voice))
 
-    // 先把系统/预置音色（speakers_test.system_speakers 和 speakers_test.upload_speakers）标记出来
+    // 先把系统/预置音色（speakers_test.system_speakers、speakers_test.upload_speakers
+    // 和 speakers.system_speakers，两个集合数据结构一致）标记出来
     // 这些音色没有用户归属，不应进入“建议清理”
     try {
-      const [systemDoc, uploadDoc] = await Promise.all([
+      const [systemDoc, uploadDoc, mainSystemDoc] = await Promise.all([
         db.collection('speakers_test').doc('system_speakers').get().catch(() => null),
-        db.collection('speakers_test').doc('upload_speakers').get().catch(() => null)
+        db.collection('speakers_test').doc('upload_speakers').get().catch(() => null),
+        db.collection('speakers').doc('system_speakers').get().catch(() => null)
       ])
 
       const markSystem = (doc, source) => {
@@ -338,9 +462,10 @@ async function listVoices(voiceType = 'clone', opts = {}) {
       }
       const sysCount = markSystem(systemDoc, 'system_speakers')
       const upCount = markSystem(uploadDoc, 'upload_speakers')
-      console.log('[VoiceManage] 系统音色匹配:', sysCount, '/上传预置音色匹配:', upCount)
+      const mainSysCount = markSystem(mainSystemDoc, 'speakers_system_speakers')
+      console.log('[VoiceManage] 系统音色匹配:', sysCount, '/上传预置音色匹配:', upCount, '/speakers 系统音色匹配:', mainSysCount)
     } catch (e) {
-      console.error('[VoiceManage] 查询 speakers_test 失败（已忽略，不影响主流程）:', e)
+      console.error('[VoiceManage] 查询 speakers/speakers_test 失败（已忽略，不影响主流程）:', e)
     }
 
     // 从 tts_clone_design_logs 日志表补充查询未匹配音色的创建者信息 + 最近使用时间
@@ -484,6 +609,7 @@ async function listVoices(voiceType = 'clone', opts = {}) {
         target_model: voice.target_model || '',
         account_type: voice.account_type,
         voice_type: voiceType,
+        provider: voice.provider || 'qwen', // 设计来源：qwen / cosy
         user_info: userInfo,
         last_used_time: voiceLastUsedTimeMap[voiceId] || null,
         creation_log: creationLog
@@ -507,11 +633,38 @@ async function listVoices(voiceType = 'clone', opts = {}) {
       w: wList.length
     }
 
+    // 获取声音克隆音色列表时，顺便更新 api_key_usage.clone_usage：
+    // key_num / key_v_num / key_w_num 分别对应 main / v / w 账号的克隆音色数量
+    // 仅在三个账号全部拉取（fetchAccounts 为全量）且数据完整时更新，
+    // 避免按账号的分页请求（此时其余账号为占位空列表）或拉取失败时写入错误数量
+    if (voiceType === 'clone' && fetchAccounts.length === ACCOUNT_KEYS.length && !incomplete) {
+      try {
+        await updateCloneUsage(accountStats)
+      } catch (usageErr) {
+        console.error('[VoiceManage] 更新 api_key_usage.clone_usage 失败（不影响主流程）:', usageErr)
+      }
+    }
+
+    // 按设计来源（Qwen/Cosy）统计各账号音色数量（design 类型前端用于子分类筛选）
+    const countProvider = (list, p) => list.filter(v => (v.provider || 'qwen') === p).length
+    const providerStats = {
+      qwen: {
+        main: countProvider(mainList, 'qwen'),
+        v: countProvider(vList, 'qwen'),
+        w: countProvider(wList, 'qwen')
+      },
+      cosy: {
+        main: countProvider(mainList, 'cosy'),
+        v: countProvider(vList, 'cosy'),
+        w: countProvider(wList, 'cosy')
+      }
+    }
+
     // 云端计算建议清理列表（逻辑与前端 _computeSuggestDelete 一致）：
-    // 未保存（非 saved/system） 且 最近 30 天未使用（参考时间：last_used_time 优先，回退 gmt_create）
+    // 未保存（非 saved/system） 且 最近 120 天未使用（参考时间：last_used_time 优先，回退 gmt_create）
     // 既无 last_used_time 也无 gmt_create 的保守排除
     const DAY_MS = 24 * 60 * 60 * 1000
-    const THRESHOLD_DAYS = 30
+    const THRESHOLD_DAYS = 120
     const now = Date.now()
     const parseTime = (v) => {
       if (!v && v !== 0) return NaN
@@ -581,6 +734,7 @@ async function listVoices(voiceType = 'clone', opts = {}) {
         voice_list: pageList, // 当前页音色（分页）
         voice_type: voiceType,
         account_stats: accountStats,
+        provider_stats: providerStats, // 各账号 Qwen/Cosy 音色数量（design 类型使用）
         // 分页元信息
         page_index: pageIndex,
         page_size: pageSize,
@@ -594,7 +748,8 @@ async function listVoices(voiceType = 'clone', opts = {}) {
         suggest_delete_truncated: includeSuggest ? suggestListTruncated : undefined, // 建议清理列表是否被截断
         // 数据完整性提示
         incomplete: incomplete, // 是否有账号数据不完整（数量可能偏少）
-        incomplete_accounts: incompleteAccounts // 不完整的账号列表
+        incomplete_accounts: incompleteAccounts, // 不完整的账号列表
+        provider_errors: providerErrors // 各来源（Qwen/Cosy）拉取错误，仅失败时有内容
       }
     }
   } catch (err) {
@@ -609,9 +764,10 @@ async function listVoices(voiceType = 'clone', opts = {}) {
  * @param {String} creatorOpenid - 创建者 openid
  * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)，默认 clone
  * @param {String} accountType - 账号类型：main, v, w
+ * @param {String} provider - 设计来源：qwen 或 cosy（仅 voiceType=design 时生效）
  * @returns {Promise<Object>} 删除结果
  */
-async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountType = 'main') {
+async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountType = 'main', provider = 'qwen') {
   console.log('[VoiceManage] 删除音色，voice:', voice, 'creator_openid:', creatorOpenid, 'type:', voiceType, 'account:', accountType)
 
   if (!voice) {
@@ -711,13 +867,29 @@ async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountTyp
   }
 
   // 4. 调用阿里云 API 删除音色
-  const model = voiceType === 'design' ? 'qwen-voice-design' : 'qwen-voice-enrollment'
+  // Qwen 声音设计：model=qwen-voice-design, action=delete, 参数 voice
+  // Cosy 声音设计：model=voice-enrollment, action=delete_voice, 参数 voice_id
+  // 声音克隆：model=qwen-voice-enrollment, action=delete, 参数 voice
+  let model, action, voiceParamKey
+  if (voiceType === 'design' && provider === 'cosy') {
+    model = 'voice-enrollment'
+    action = 'delete_voice'
+    voiceParamKey = 'voice_id'
+  } else if (voiceType === 'design') {
+    model = 'qwen-voice-design'
+    action = 'delete'
+    voiceParamKey = 'voice'
+  } else {
+    model = 'qwen-voice-enrollment'
+    action = 'delete'
+    voiceParamKey = 'voice'
+  }
 
   const payload = {
     model: model,
     input: {
-      action: 'delete',
-      voice: voice
+      action: action,
+      [voiceParamKey]: voice
     }
   }
 
@@ -925,8 +1097,8 @@ exports.main = async (event, context) => {
         break
 
       case 'delete':
-        // 删除音色
-        result = await deleteVoice(voice, creator_openid, voice_type, account_type)
+        // 删除音色（design 类型按 provider 区分 Qwen/Cosy 接口）
+        result = await deleteVoice(voice, creator_openid, voice_type, account_type, event.provider || event.design_provider || 'qwen')
         break
 
       case 'upload_speaker':

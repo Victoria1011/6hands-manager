@@ -27,7 +27,8 @@ exports.main = async (event, context) => {
   // 白名单：允许访问的小程序 AppID
   // 请在此处添加被授权的小程序 AppID
   const allowedAppids = [
-    'wx6abc7cafcf01cb1b'
+    'wx6abc7cafcf01cb1b',
+    'wx9f7892ba3915a8f3'
     // 示例：'wx1234567890abcdef'
     // 添加实际需要访问的小程序 AppID
   ]
@@ -46,13 +47,17 @@ exports.main = async (event, context) => {
     }
   }
   //检查来源方 openID 是否在白名单中
-  if (!fromOpenid || allowedOpenids.length === 0 || !allowedOpenids.includes(fromOpenid)) {
-    console.log('[cloudbase_auth] 授权失败：来源方 openid 不在白名单中')
-    return {
-      errCode: -1,
-      errMsg: '未授权访问',
-      auth: ''
+  if(fromOpenid === allowedAppids[0]) { // sixhands-manager
+    if (!fromOpenid || allowedOpenids.length === 0 || !allowedOpenids.includes(fromOpenid)) {
+      console.log('[cloudbase_auth] 授权失败：来源方 openid 不在白名单中')
+      return {
+        errCode: -1,
+        errMsg: '未授权访问',
+        auth: ''
+      }
     }
+  } else {  // tts-home
+
   }
   console.log('[cloudbase_auth] 授权成功')
 

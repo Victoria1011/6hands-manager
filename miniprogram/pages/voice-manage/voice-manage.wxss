@@ -768,3 +768,59 @@
   border-radius: 12rpx;
   padding: 0;
 }
+
+/* 声音设计来源筛选（全部 / Qwen / Cosy） */
+.provider-tabs {
+  display: flex;
+  background: #f5f5f5;
+  border-radius: 8rpx;
+  padding: 4rpx;
+  gap: 4rpx;
+  width: 100%;
+  margin-top: 20rpx;
+  box-shadow: 2rpx 2rpx 2rpx 2rpx rgba(0, 0, 0, 0.2);
+}
+
+.provider-tab {
+  flex: 1;
+  padding: 12rpx 16rpx;
+  font-size: 26rpx;
+  color: #666;
+  border-radius: 6rpx;
+  transition: all 0.3s;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.provider-tab-active {
+  background: #fff;
+  color: #08979c;
+  font-weight: 600;
+}
+
+/* 音色卡片上的设计来源徽标 */
+.voice-model-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  min-width: 0;
+}
+
+.provider-badge {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  line-height: 1.4;
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+  font-weight: 600;
+}
+
+.provider-badge-qwen {
+  background: #e3f2fd;
+  color: #1890ff;
+}
+
+.provider-badge-cosy {
+  background: #e6fffb;
+  color: #08979c;
+}

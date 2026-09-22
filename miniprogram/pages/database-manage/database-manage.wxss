@@ -1927,3 +1927,69 @@
   color: #666;
   margin-top: 2rpx;
 }
+
+/* api_key_usage 字段行（全字段展平展示） */
+.apikey-field-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+}
+
+.apikey-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 14rpx 16rpx;
+  background: #fff;
+  border: 2rpx solid #e8e8e8;
+  border-radius: 8rpx;
+}
+
+.apikey-field:active {
+  background: #f0f9ff;
+}
+
+.apikey-field-path {
+  font-size: 22rpx;
+  color: #666;
+  font-family: monospace;
+  word-break: break-all;
+  flex: 1;
+  line-height: 1.5;
+}
+
+.apikey-field-value {
+  font-size: 26rpx;
+  font-weight: 600;
+  flex-shrink: 0;
+  max-width: 45%;
+  text-align: right;
+  word-break: break-all;
+}
+
+.apikey-type-number {
+  color: #1890ff;
+}
+
+.apikey-type-string {
+  color: #333;
+}
+
+.apikey-type-boolean {
+  color: #fa8c16;
+}
+
+/* api_key_usage 布尔字段编辑（开关） */
+.apikey-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 8rpx 0;
+}
+
+.apikey-switch-value {
+  font-size: 28rpx;
+  color: #333;
+  font-family: monospace;
+}

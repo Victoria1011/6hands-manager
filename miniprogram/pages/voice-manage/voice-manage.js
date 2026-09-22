@@ -15,6 +15,8 @@ Page({
     totalCount: 0, // 当前类型下所有账号的音色总数（"全部" 账号标签使用）
     savedVoiceCount: 0,
     currentType: '', // 当前音色类型：clone(声音克隆) 或 design(声音设计)，空表示未选择
+    designProvider: 'all', // 声音设计来源筛选：all(全部), qwen(Qwen设计), cosy(Cosy设计)
+    providerCounts: { qwen: 0, cosy: 0 }, // 当前条件下 Qwen/Cosy 音色数量（来源筛选标签展示）
     currentAccount: 'all', // 当前账号：all(全部), main(主账号), v(V账号), w(W账号)
     currentListTab: 'all', // 当前列表标签：all(全部) 或 suggest(建议清理)
     accountStats: { main: 0, v: 0, w: 0 }, // 各账号音色数量统计
@@ -216,26 +218,43 @@ Page({
   // 当前 tab=「全部」时：
   //   - currentAccount='all' → 合并三个账号已加载列表
   //   - currentAccount=具体账号 → 仅该账号已加载列表
+  // 声音设计类型下，再按 designProvider（all/qwen/cosy）二次过滤
   applyFilterAndRender() {
     const { currentAccount, currentListTab } = this.data
     const suggestDeleteList = this._cachedSuggestDeleteList || []
     const suggestDeleteStats = this._cachedSuggestDeleteStats || { main: 0, v: 0, w: 0 }
     const suggestDeleteCount = this._cachedSuggestDeleteCount || 0
     const accountStats = this._cachedAccountStats || { main: 0, v: 0, w: 0 }
+    const providerCounts = this._computeProviderCounts()
+    const isProviderFiltered = this.data.currentType === 'design' && this.data.designProvider !== 'all'
 
     if (currentListTab === 'suggest') {
-      const filteredList = currentAccount === 'all'
+      let filteredList = currentAccount === 'all'
         ? suggestDeleteList
         : suggestDeleteList.filter(v => v.account_type === currentAccount)
+      filteredList = this._filterByProvider(filteredList)
+
+      // 建议清理数量/统计：按 provider 过滤后重新计算（未过滤时用云端缓存值）
+      let statsShown = suggestDeleteStats
+      let countShown = suggestDeleteCount
+      if (isProviderFiltered) {
+        const filteredAll = this._filterByProvider(suggestDeleteList)
+        statsShown = { main: 0, v: 0, w: 0 }
+        filteredAll.forEach(v => {
+          if (statsShown[v.account_type] != null) statsShown[v.account_type]++
+        })
+        countShown = filteredAll.length
+      }
 
       this.setData({
         savedVoiceCount: 0, // 建议清理列表中不含已保存音色
         displayCount: filteredList.length,
+        providerCounts,
         // suggestDeleteCount / suggestDeleteStats 在切账号时需展示对应账号的数量
         suggestDeleteCount: currentAccount === 'all'
-          ? suggestDeleteCount
-          : (suggestDeleteStats[currentAccount] || 0),
-        suggestDeleteStats
+          ? countShown
+          : (statsShown[currentAccount] || 0),
+        suggestDeleteStats: statsShown
       })
       this.renderFilteredList(filteredList)
       return
@@ -260,10 +279,62 @@ Page({
     // （savedVoiceCount 由 loadVoiceList 在首页时一次性写入；切账号/标签时不重算）
     // 这里不再覆盖，保留 loadVoiceList 中设置的值
 
+    const displayCount = isProviderFiltered
+      ? (providerCounts[this.data.designProvider] || 0)
+      : this._computeDisplayCount(currentAccount, accountStats, suggestDeleteStats)
+
     this.setData({
-      displayCount: this._computeDisplayCount(currentAccount, accountStats, suggestDeleteStats)
+      providerCounts,
+      displayCount
     })
-    this.renderFilteredList(filteredList)
+    this.renderFilteredList(this._filterByProvider(filteredList))
+  },
+
+  // 按声音设计来源过滤列表（仅 design 类型且选中 qwen/cosy 时生效）
+  _filterByProvider(list) {
+    if (this.data.currentType !== 'design') return list
+    const p = this.data.designProvider
+    if (!p || p === 'all') return list
+    return list.filter(v => (v.provider || 'qwen') === p)
+  },
+
+  // 计算当前账号/标签下 Qwen/Cosy 音色数量（来源筛选标签展示，不受来源筛选本身影响）
+  // - 全部 tab：使用云端全量统计 provider_stats（分页拉取不影响总数）
+  // - 建议清理 tab：建议列表云端一次性返回，直接统计
+  _computeProviderCounts() {
+    if (this.data.currentType !== 'design') return { qwen: 0, cosy: 0 }
+    const acc = this.data.currentAccount
+
+    if (this.data.currentListTab === 'suggest') {
+      const counts = { qwen: 0, cosy: 0 }
+      ;(this._cachedSuggestDeleteList || []).forEach(v => {
+        if (acc !== 'all' && v.account_type !== acc) return
+        const p = v.provider || 'qwen'
+        if (counts[p] != null) counts[p]++
+      })
+      return counts
+    }
+
+    const ps = this._cachedProviderStats || { qwen: { main: 0, v: 0, w: 0 }, cosy: { main: 0, v: 0, w: 0 } }
+    const sumFor = (p) => acc === 'all'
+      ? ((ps[p].main || 0) + (ps[p].v || 0) + (ps[p].w || 0))
+      : (ps[p][acc] || 0)
+    return { qwen: sumFor('qwen'), cosy: sumFor('cosy') }
+  },
+
+  // 切换声音设计来源（全部 / Qwen / Cosy）
+  switchDesignProvider(e) {
+    const provider = e.currentTarget.dataset.provider
+    if (provider === this.data.designProvider) return
+
+    console.log('[VoiceManage] 切换设计来源:', provider)
+    this.setData({
+      designProvider: provider,
+      batchMode: false,
+      selectedVoices: {},
+      selectedCount: 0
+    })
+    this.applyFilterAndRender()
   },
 
   // 计算当前条件下应展示的音色总数（不受已加载页数影响，使用云端统计）
@@ -379,6 +450,7 @@ Page({
       let savedVoiceCount = 0
       let incompleteAccounts = []
       let suggestTruncated = false
+      let providerErrors = {} // 分来源（Qwen/Cosy）拉取错误 { cosy: { main: '...' } }
 
       ACCOUNTS.forEach((acc, idx) => {
         const res = responses[idx]
@@ -396,6 +468,16 @@ Page({
           return
         }
         const data = result.data || {}
+
+        // 收集分来源拉取错误（如 Cosy 拉取失败，用于明确提示"列表为空"的原因）
+        const pe = data.provider_errors || {}
+        Object.keys(pe).forEach(p => {
+          if (pe[p] && pe[p][acc]) {
+            providerErrors[p] = providerErrors[p] || {}
+            providerErrors[p][acc] = pe[p][acc]
+          }
+        })
+
         const list = (data.voice_list || []).map(v => ({
           ...v,
           last_used_time: v.last_used_time ? this.formatTime(v.last_used_time) : null
@@ -418,6 +500,8 @@ Page({
           savedVoiceCount = data.saved_voice_count || 0
           incompleteAccounts = data.incomplete_accounts || []
           suggestTruncated = !!data.suggest_delete_truncated
+          // 各账号 Qwen/Cosy 音色数量（design 类型来源筛选标签使用）
+          this._cachedProviderStats = data.provider_stats || { qwen: { main: 0, v: 0, w: 0 }, cosy: { main: 0, v: 0, w: 0 } }
         }
       })
 
@@ -465,6 +549,20 @@ Page({
         wx.showModal({
           title: '建议清理列表已截断',
           content: `建议清理的音色数量过多（共 ${suggestDeleteCount} 个），列表仅显示前 ${suggestDeleteList.length} 个。可先清理当前列表后再刷新查看剩余。`,
+          showCancel: false,
+          confirmText: '知道了'
+        })
+      } else if (Object.keys(providerErrors).length > 0) {
+        // 某个来源（Qwen/Cosy）拉取失败：明确提示，便于定位「来源列表为空」的原因
+        const parts = Object.keys(providerErrors).map(p => {
+          const label = p === 'cosy' ? 'Cosy' : 'Qwen'
+          const accMsgs = Object.keys(providerErrors[p])
+            .map(a => `${this.data.accountNames[a] || a}: ${providerErrors[p][a]}`)
+          return `${label}（${accMsgs.join('；')}）`
+        })
+        wx.showModal({
+          title: '部分音色来源拉取失败',
+          content: `${parts.join('；')}。对应来源的音色列表可能为空或不完整，请点击「刷新」重试。`,
           showCancel: false,
           confirmText: '知道了'
         })
@@ -658,6 +756,8 @@ Page({
     this._resetPagingState()
     this.setData({
       currentType: type,
+      designProvider: 'all',
+      providerCounts: { qwen: 0, cosy: 0 },
       voiceList: [],
       allVoiceList: [],
       hasMore: false,
@@ -707,6 +807,7 @@ Page({
     this._cachedSuggestDeleteList = []
     this._cachedSuggestDeleteCount = 0
     this._cachedSuggestDeleteStats = { main: 0, v: 0, w: 0 }
+    this._cachedProviderStats = { qwen: { main: 0, v: 0, w: 0 }, cosy: { main: 0, v: 0, w: 0 } }
   },
 
   // 删除成功后本地移除已删除项 + 同步统计，避免重新拉取列表（提升体验）
@@ -742,6 +843,18 @@ Page({
     })
     this._cachedSuggestDeleteStats = suggestDeleteStats
     this._cachedSuggestDeleteCount = this._cachedSuggestDeleteList.length
+
+    // 4.5 更新设计来源统计（design 类型 Qwen/Cosy 数量，供来源筛选标签展示）
+    const providerStats = this._cachedProviderStats
+    if (providerStats) {
+      ;(deletedItems || []).forEach(item => {
+        const p = (item && item.provider) || 'qwen'
+        const acc = (item && item.account_type) || 'main'
+        if (providerStats[p] && providerStats[p][acc] != null) {
+          providerStats[p][acc] = Math.max(0, providerStats[p][acc] - 1)
+        }
+      })
+    }
 
     // 5. 计算新的 totalCount 与 savedVoiceCount
     const totalCount = (accountStats.main || 0) + (accountStats.v || 0) + (accountStats.w || 0)
@@ -795,6 +908,7 @@ Page({
     const voice = e.currentTarget.dataset.voice
     const creatorOpenid = e.currentTarget.dataset.creatorOpenid || ''
     const accountType = e.currentTarget.dataset.accountType || 'main'
+    const provider = e.currentTarget.dataset.provider || 'qwen'
 
     wx.showModal({
       title: '确认删除',
@@ -803,19 +917,19 @@ Page({
       confirmColor: '#ff4d4f',
       success: async (res) => {
         if (res.confirm) {
-          await this.deleteVoice(voice, creatorOpenid, accountType)
+          await this.deleteVoice(voice, creatorOpenid, accountType, provider)
         }
       }
     })
   },
 
   // 执行删除
-  async deleteVoice(voice, creatorOpenid, accountType = 'main') {
+  async deleteVoice(voice, creatorOpenid, accountType = 'main', provider = 'qwen') {
     wx.showLoading({ title: '删除中...' })
 
     try {
       const token = app.getToken()
-      console.log('[VoiceManage] 开始删除音色:', voice, 'creator_openid:', creatorOpenid, '类型:', this.data.currentType, '账号:', accountType)
+      console.log('[VoiceManage] 开始删除音色:', voice, 'creator_openid:', creatorOpenid, '类型:', this.data.currentType, '来源:', provider, '账号:', accountType)
 
       const res = await app.globalData.cloud.callFunction({
         name: 'managerVoiceManage',
@@ -825,7 +939,8 @@ Page({
           voice_type: this.data.currentType,
           voice: voice,
           creator_openid: creatorOpenid,
-          account_type: accountType
+          account_type: accountType,
+          provider: provider // design 类型区分 Qwen/Cosy 删除接口
         }
       })
 
@@ -835,7 +950,7 @@ Page({
       if (res.result.code === 0) {
         wx.showToast({ title: '删除成功', icon: 'success' })
         // 本地移除已删除项，避免重新拉取列表（提升体验）
-        this._removeDeletedVoicesLocally([voice], [{ voice, account_type: accountType }])
+        this._removeDeletedVoicesLocally([voice], [{ voice, account_type: accountType, provider }])
       } else {
         wx.showToast({ title: res.result.message || '删除失败', icon: 'none' })
       }
@@ -936,6 +1051,7 @@ Page({
         voice: voice.voice,
         creatorOpenid: voice.user_info ? voice.user_info.openid : '',
         accountType: voice.account_type || 'main',
+        provider: voice.provider || 'qwen',
         _raw: voice
       }))
 
@@ -964,7 +1080,7 @@ Page({
 
     wx.showModal({
       title: '确认批量清理',
-      content: `确定要删除 ${count} 个建议清理的音色吗？（未保存且最近30天未使用）`,
+      content: `确定要删除 ${count} 个建议清理的音色吗？（未保存且最近120天未使用）`,
       confirmText: '全部删除',
       confirmColor: '#ff4d4f',
       success: async (res) => {
@@ -988,6 +1104,7 @@ Page({
       voice: item.voice,
       creatorOpenid: item.user_info ? item.user_info.openid : '',
       accountType: item.account_type || 'main',
+      provider: item.provider || 'qwen',
       _raw: item
     }))
 
@@ -1057,7 +1174,8 @@ Page({
             voice_type: this.data.currentType,
             voice: item.voice,
             creator_openid: item.creatorOpenid,
-            account_type: item.accountType
+            account_type: item.accountType,
+            provider: item.provider || 'qwen' // design 类型区分 Qwen/Cosy 删除接口
           }
         })
 

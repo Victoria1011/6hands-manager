@@ -104,8 +104,8 @@ Page({
     // api_key_usage 编辑相关
     showApiKeyEditModal: false,
     apiKeyEditIndex: -1,
-    apiKeyEditUsage: '', // clone_usage 或 design_usage
-    apiKeyEditField: '', // key_num, key_v_num, key_w_num
+    apiKeyEditPath: '', // 字段完整路径，如 clone_usage.key_num、chat_usage.deepseek-v4-flash.input
+    apiKeyEditType: 'number', // number, string, boolean
     apiKeyEditLabel: '',
     apiKeyEditValue: 0
   },
@@ -729,7 +729,8 @@ Page({
           ...item,
           updated_at_formatted: this.formatTime(item.updated_at),
           clone_usage: item.clone_usage || {},
-          design_usage: item.design_usage || {}
+          design_usage: item.design_usage || {},
+          apiKeyGroups: this.buildApiKeyGroups(item)
         })),
         flatLogs: [],
         flatCoins: []
@@ -1727,29 +1728,25 @@ Page({
     return String(value)
   },
 
-  // 编辑 api_key_usage 字段
+  // 编辑 api_key_usage 字段（支持任意嵌套路径）
   onEditApiKeyField(e) {
-    const { index, usage, field } = e.currentTarget.dataset
+    const { index, path, type, editable } = e.currentTarget.dataset
     const item = this.data.dataList[index]
-    if (!item) return
+    if (!item || !path) return
 
-    const usageData = item[usage] || {}
-    const value = usageData[field] || 0
-
-    // 构建显示标签
-    const usageLabel = usage === 'clone_usage' ? '克隆' : '设计'
-    const fieldLabels = {
-      key_num: 'key_num',
-      key_v_num: 'key_v_num',
-      key_w_num: 'key_w_num'
+    if (editable === false || editable === 'false') {
+      wx.showToast({ title: '该字段不支持编辑', icon: 'none' })
+      return
     }
-    const label = `${usageLabel}使用 - ${fieldLabels[field]}`
+
+    const value = this.getNestedValue(item, path)
+    const label = String(path).split('.').join(' › ')
 
     this.setData({
       showApiKeyEditModal: true,
       apiKeyEditIndex: index,
-      apiKeyEditUsage: usage,
-      apiKeyEditField: field,
+      apiKeyEditPath: path,
+      apiKeyEditType: type || 'string',
       apiKeyEditLabel: label,
       apiKeyEditValue: value
     })
@@ -1762,23 +1759,134 @@ Page({
     })
   },
 
+  // api_key_usage 布尔字段切换
+  onApiKeyBooleanChange(e) {
+    this.setData({
+      apiKeyEditValue: !!e.detail.value
+    })
+  },
+
   // 关闭 api_key_usage 编辑弹窗
   onCloseApiKeyEditModal() {
     this.setData({
       showApiKeyEditModal: false,
       apiKeyEditIndex: -1,
-      apiKeyEditUsage: '',
-      apiKeyEditField: '',
+      apiKeyEditPath: '',
+      apiKeyEditType: 'number',
       apiKeyEditLabel: '',
       apiKeyEditValue: 0
     })
   },
 
-  // 保存 api_key_usage 字段
-  async onSaveApiKeyField() {
-    const { apiKeyEditIndex, apiKeyEditUsage, apiKeyEditField, apiKeyEditValue } = this.data
+  // 将 api_key_usage 文档构建为分组展示结构：嵌套对象按顶层字段分组，标量字段归入基础配置
+  buildApiKeyGroups(item) {
+    if (!item || typeof item !== 'object') return []
+    const skipKeys = ['_id', '_openid', 'updated_at', 'apiKeyGroups', 'updated_at_formatted']
+    const sectionTitles = {
+      chat_usage: '对话使用 (chat_usage)',
+      clone_usage: '克隆使用 (clone_usage)',
+      design_usage: '设计使用 (design_usage)',
+      image_usage: '图片使用 (image_usage)'
+    }
 
-    if (apiKeyEditIndex === -1 || !apiKeyEditUsage || !apiKeyEditField) {
+    const groups = []
+    const scalarFields = []
+
+    Object.keys(item).forEach(key => {
+      if (skipKeys.includes(key)) return
+      const val = item[key]
+      if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+        const fields = this.flattenApiKeyDoc(val, key)
+        if (fields.length > 0) {
+          groups.push({
+            key,
+            title: sectionTitles[key] || key,
+            fields
+          })
+        }
+      } else {
+        scalarFields.push(this.makeApiKeyField(key, val))
+      }
+    })
+
+    if (scalarFields.length > 0) {
+      groups.push({ key: '_base', title: '基础配置', fields: scalarFields })
+    }
+    return groups
+  },
+
+  // 递归展平嵌套对象为字段列表（path 以 prefix 开头，点号分隔）
+  flattenApiKeyDoc(obj, prefix) {
+    const fields = []
+    const walk = (node, path) => {
+      Object.keys(node || {}).forEach(key => {
+        const val = node[key]
+        const childPath = `${path}.${key}`
+        if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+          walk(val, childPath)
+        } else {
+          fields.push(this.makeApiKeyField(childPath, val))
+        }
+      })
+    }
+    walk(obj, prefix)
+    return fields
+  },
+
+  // 生成单个字段的展示信息
+  makeApiKeyField(path, value) {
+    const segments = String(path).split('.')
+    const isEditableScalar = value === null || value === undefined
+      ? false
+      : ['string', 'number', 'boolean'].includes(typeof value)
+    const type = typeof value === 'boolean' ? 'boolean' : typeof value === 'number' ? 'number' : 'string'
+
+    let display
+    if (value === null || value === undefined) {
+      display = '-'
+    } else if (typeof value === 'boolean') {
+      display = value ? 'true' : 'false'
+    } else if (typeof value === 'object') {
+      display = JSON.stringify(value)
+    } else {
+      display = String(value)
+    }
+
+    return {
+      path,
+      label: segments.join(' › '),
+      value,
+      type,
+      display,
+      editable: isEditableScalar
+    }
+  },
+
+  // 按点号路径读取嵌套值
+  getNestedValue(obj, path) {
+    return String(path).split('.').reduce((acc, key) => {
+      return acc === null || acc === undefined ? undefined : acc[key]
+    }, obj)
+  },
+
+  // 按点号路径写入嵌套值
+  setNestedValue(obj, path, value) {
+    const keys = String(path).split('.')
+    let cur = obj
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (cur[keys[i]] === null || typeof cur[keys[i]] !== 'object') {
+        cur[keys[i]] = {}
+      }
+      cur = cur[keys[i]]
+    }
+    cur[keys[keys.length - 1]] = value
+  },
+
+  // 保存 api_key_usage 字段（按嵌套路径点号直写数据库）
+  async onSaveApiKeyField() {
+    const { apiKeyEditIndex, apiKeyEditPath, apiKeyEditType, apiKeyEditValue } = this.data
+
+    if (apiKeyEditIndex === -1 || !apiKeyEditPath) {
       wx.showToast({ title: '数据错误', icon: 'none' })
       return
     }
@@ -1786,7 +1894,20 @@ Page({
     const item = this.data.dataList[apiKeyEditIndex]
     if (!item) return
 
-    const newValue = Number(apiKeyEditValue) || 0
+    // 按字段类型转换新值
+    let newValue
+    if (apiKeyEditType === 'boolean') {
+      newValue = !!apiKeyEditValue
+    } else if (apiKeyEditType === 'number') {
+      newValue = Number(apiKeyEditValue)
+      if (isNaN(newValue)) {
+        wx.showToast({ title: '请输入有效数字', icon: 'none' })
+        return
+      }
+    } else {
+      newValue = String(apiKeyEditValue == null ? '' : apiKeyEditValue)
+    }
+
     const _id = item._id
 
     wx.showLoading({ title: '保存中...' })
@@ -1794,10 +1915,9 @@ Page({
     try {
       const token = app.getToken()
 
-      // 构建更新数据：直接更新嵌套字段
-      const updatePath = `${apiKeyEditUsage}.${apiKeyEditField}`
+      // 构建更新数据：点号路径直接更新嵌套字段
       const updateData = {
-        [updatePath]: newValue
+        [apiKeyEditPath]: newValue
       }
 
       const res = await app.globalData.cloud.callFunction({
@@ -1821,19 +1941,19 @@ Page({
           icon: 'success'
         })
 
-        // 更新本地数据
+        // 更新本地数据并重建分组展示
         const newDataList = [...this.data.dataList]
-        if (!newDataList[apiKeyEditIndex][apiKeyEditUsage]) {
-          newDataList[apiKeyEditIndex][apiKeyEditUsage] = {}
-        }
-        newDataList[apiKeyEditIndex][apiKeyEditUsage][apiKeyEditField] = newValue
+        const newItem = { ...newDataList[apiKeyEditIndex] }
+        this.setNestedValue(newItem, apiKeyEditPath, newValue)
+        newItem.apiKeyGroups = this.buildApiKeyGroups(newItem)
+        newDataList[apiKeyEditIndex] = newItem
 
         this.setData({
           dataList: newDataList,
           showApiKeyEditModal: false,
           apiKeyEditIndex: -1,
-          apiKeyEditUsage: '',
-          apiKeyEditField: '',
+          apiKeyEditPath: '',
+          apiKeyEditType: 'number',
           apiKeyEditLabel: '',
           apiKeyEditValue: 0
         })

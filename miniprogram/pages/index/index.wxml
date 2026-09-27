@@ -124,6 +124,14 @@
           <text class="menu-text">发票开具</text>
         </view>
       </view>
+
+      <!-- 第四行：花匠托管 - 独占整行 -->
+      <view class="menu-row single">
+        <view class="menu-item full-width" bindtap="onPpgarden">
+          <view class="menu-icon">🌱</view>
+          <text class="menu-text">花匠托管</text>
+        </view>
+      </view>
     </view>
   </view>
 </view>

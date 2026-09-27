@@ -85,6 +85,13 @@ Page({
     });
   },
 
+  // 花匠托管（云上花匠定时启动/暂停）
+  onPpgarden() {
+    wx.navigateTo({
+      url: '/pages/ppgarden-manage/ppgarden-manage'
+    });
+  },
+
   // ===== 音视频预览 =====
 
   // 文件 ID 输入

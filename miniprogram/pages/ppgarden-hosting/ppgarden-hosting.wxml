@@ -1,0 +1,50 @@
+<view class="container">
+  <!-- 头部 -->
+  <view class="header">
+    <view class="header-title">正在托管</view>
+    <view class="header-actions">
+      <button class="mini-btn ghost" size="mini" bindtap="load" loading="{{loading}}">刷新</button>
+    </view>
+  </view>
+
+  <!-- 正在托管 -->
+  <view class="section-title" wx:if="{{hosting.length}}">正在托管 ({{hosting.length}})</view>
+  <view class="host-card" wx:for="{{hosting}}" wx:for-index="i" wx:key="gardenId">
+    <view class="host-line1">
+      <text class="host-name">{{item.gardenName}}</text>
+      <text class="host-state active">{{item.stateText}}</text>
+    </view>
+    <view class="host-line2">账号：{{item.accountName}}</view>
+    <view class="host-actions">
+      <button size="mini" class="act-btn act-pause"
+              data-account-id="{{item.accountId}}" data-garden-id="{{item.gardenId}}" data-i="{{i}}"
+              bindtap="onPauseGarden" loading="{{item.busyPause}}">暂停托管</button>
+    </view>
+  </view>
+  <view class="empty" wx:if="{{!loading && hosting.length === 0}}">
+    <view class="empty-icon">💤</view>
+    <view>当前没有花园在托管中</view>
+  </view>
+
+  <!-- 其它状态 -->
+  <block wx:if="{{waiting.length}}">
+    <view class="section-title">其它状态 ({{waiting.length}})</view>
+    <view class="host-card" wx:for="{{waiting}}" wx:key="gardenId">
+      <view class="host-line1">
+        <text class="host-name">{{item.gardenName}}</text>
+        <text class="host-state idle">{{item.stateText}}</text>
+      </view>
+      <view class="host-line2">账号：{{item.accountName}}</view>
+    </view>
+  </block>
+
+  <!-- 查询异常的账号 -->
+  <block wx:if="{{errors.length}}">
+    <view class="section-title">查询异常</view>
+    <view class="error-item" wx:for="{{errors}}" wx:key="index">
+      {{item.accountName}} — {{item.message}}
+    </view>
+  </block>
+
+  <view class="updated" wx:if="{{updatedAtText}}">{{updatedAtText}} 更新</view>
+</view>

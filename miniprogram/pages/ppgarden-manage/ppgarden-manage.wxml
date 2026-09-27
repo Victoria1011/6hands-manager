@@ -1,0 +1,180 @@
+<view class="container">
+  <!-- 头部 -->
+  <view class="header">
+    <view class="header-title">花匠托管</view>
+    <view class="master-wrap">
+      <text class="master-label">定时任务</text>
+      <switch checked="{{masterEnabled}}" color="#07c160"
+              disabled="{{masterSwitching}}" bindchange="onToggleMaster"/>
+    </view>
+  </view>
+  <view class="header-actions sub">
+    <button class="mini-btn site" size="mini" bindtap="onHostingNow">正在托管</button>
+    <button class="mini-btn ghost" size="mini" bindtap="onToggleLogs">{{showLogs ? '隐藏日志' : '执行日志'}}</button>
+    <button class="mini-btn primary" size="mini" bindtap="onAddTap">＋ 添加账号</button>
+    <button class="mini-btn ghost" size="mini" bindtap="onRefresh" loading="{{loading}}">刷新</button>
+  </view>
+
+  <view class="tip-bar">
+    <text class="tip-icon">⏱</text>
+    <text class="tip-text">三步配置：① 添加账号 ② 加载花园并为每个花园设置每小时时段（或一键分配，自动错开互不重叠）③ 打开各花园的定时开关。到点自动启动/暂停，也可随时手动启停单个花园。</text>
+  </view>
+
+  <!-- 账号列表 -->
+  <view class="account-list">
+    <view class="account-card" wx:for="{{accounts}}" wx:key="_id">
+      <view class="card-top">
+        <view class="account-name">
+          <text class="name-text">{{item.remark || item.username}}</text>
+          <text class="session-badge {{item.sessionOk ? 'ok' : (item.loginError ? 'bad' : 'idle')}}">{{item.sessionOk ? '今日已登录' : (item.loginError ? '登录失败' : '待登录')}}</text>
+        </view>
+        <text class="reload-gardens" data-index="{{index}}" catchtap="onReloadGardens">{{item.gardensLoading ? '花园刷新中...' : '从网站刷新花园'}}</text>
+      </view>
+
+      <view class="account-sub">{{item.username}}</view>
+
+      <!-- 花园托管配置（每个花园独立：定时开关 / 每小时时段 / 手动启停） -->
+      <view class="garden-picker">
+        <view class="garden-picker-head">
+          <text class="garden-title">花园托管配置</text>
+          <text class="reload-gardens assign {{autoAssigning ? 'action-disabled' : ''}}"
+                data-index="{{index}}" catchtap="onAutoAssignAll">{{autoAssigning ? '分配中...' : '🎲 一键分配时段'}}</text>
+        </view>
+
+        <view class="garden-item" wx:for="{{item.gardenRows}}" wx:for-item="gr" wx:for-index="ri" wx:key="gardenId">
+          <view class="garden-row-line">
+            <view class="garden-sched-switch">
+              <switch checked="{{gr.schedEnabled}}" color="#07c160"
+                      data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
+                      bindchange="onToggleGardenSched"/>
+            </view>
+            <view class="garden-info">
+              <view class="garden-row-name">
+                {{gr.name}}
+                <text class="garden-channel" wx:if="{{gr.channelText}}">{{gr.channelText}}</text>
+              </view>
+              <view class="garden-row-windows {{gr.hasWindows ? '' : 'win-empty'}}">
+                定时：{{gr.hasWindows ? '每小时 ' + gr.windowsText + ' 分' : '未设置时段'}}
+              </view>
+            </view>
+            <view class="garden-row-actions">
+              <button size="mini" class="act-btn act-start"
+                      data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
+                      bindtap="onGardenRun" loading="{{gr.busyStart}}" disabled="{{gr.busyPause}}">启动</button>
+              <button size="mini" class="act-btn act-pause"
+                      data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
+                      bindtap="onGardenPause" loading="{{gr.busyPause}}" disabled="{{gr.busyStart}}">暂停</button>
+              <button size="mini" class="act-btn"
+                      data-index="{{index}}" data-ri="{{ri}}"
+                      bindtap="onEditGardenWindows">{{gardenEditor.key === index + '_' + ri ? '收起' : '改时段'}}</button>
+            </view>
+          </view>
+
+          <!-- 花园时段编辑器 -->
+          <view class="garden-win-editor" wx:if="{{gardenEditor.key === index + '_' + ri}}">
+            <view class="editor-tip">编辑「{{gardenEditor.gardenName}}」的每小时托管时段：</view>
+            <view class="window-row" wx:for="{{gardenEditor.windows}}" wx:for-item="w" wx:for-index="wi" wx:key="wi">
+              <text class="window-index">时段{{wi + 1}}</text>
+              <input class="minute-input" type="number" maxlength="2" value="{{w.start}}"
+                     data-wi="{{wi}}" data-field="start" bindinput="onEditorInput" placeholder="00"/>
+              <text class="window-sep">分 至</text>
+              <input class="minute-input" type="number" maxlength="2" value="{{w.stop}}"
+                     data-wi="{{wi}}" data-field="stop" bindinput="onEditorInput" placeholder="00"/>
+              <text class="window-sep">分</text>
+              <text class="window-remove" data-wi="{{wi}}" catchtap="onEditorRemove">✕</text>
+            </view>
+            <view class="window-add" bindtap="onEditorAdd" wx:if="{{gardenEditor.windows.length < 6}}">＋ 添加时段</view>
+            <view class="editor-actions">
+              <button size="mini" class="act-btn" bindtap="onCancelGardenEditor">取消</button>
+              <button size="mini" class="act-btn act-save-gardens" loading="{{savingGardenWindows}}" bindtap="onSaveGardenWindows">保存时段</button>
+            </view>
+          </view>
+        </view>
+
+        <view class="garden-empty" wx:if="{{!item.gardensLoading && (!item.gardenRows || !item.gardenRows.length)}}">
+          尚未加载花园列表，点击右上角「从网站刷新花园」获取
+        </view>
+      </view>
+
+      <!-- 托管状态（常显，可刷新） -->
+      <view class="status-box">
+        <view class="status-head">
+          <text class="status-title">托管状态</text>
+          <view class="status-head-right">
+            <text class="status-updated" wx:if="{{item.statusUpdatedAtText}}">{{item.statusUpdatedAtText}} 更新</text>
+            <text class="status-refresh" data-id="{{item._id}}" data-index="{{index}}"
+                  catchtap="onRefreshStatus">{{item.statusLoading ? '刷新中...' : '刷新'}}</text>
+          </view>
+        </view>
+        <view class="status-summary" wx:if="{{item.statusSummary}}">{{item.statusSummary}}</view>
+        <view class="status-loading" wx:if="{{item.statusLoading}}">查询中...</view>
+        <view class="status-garden" wx:for="{{item.states}}" wx:for-item="g" wx:key="gardenId">
+          <text class="garden-name">{{g.name}}</text>
+          <text class="garden-state">{{g.stateText}}</text>
+        </view>
+        <view class="status-empty" wx:if="{{!item.statusSummary && !item.statusLoading}}">暂无状态，点击右上角「刷新」获取</view>
+      </view>
+
+      <view class="card-actions">
+        <button size="mini" class="act-btn" data-index="{{index}}" bindtap="onEditTap">编辑账号</button>
+        <button size="mini" class="act-btn act-danger"
+                data-id="{{item._id}}" data-name="{{item.remark || item.username}}"
+                bindtap="onDeleteTap">删除账号</button>
+      </view>
+    </view>
+
+    <view class="empty" wx:if="{{!loading && accounts.length === 0}}">
+      <view class="empty-icon">🌱</view>
+      <view>还没有添加账号</view>
+      <view class="empty-sub">点击「＋ 添加账号」开始，添加后加载花园并配置时段</view>
+    </view>
+  </view>
+
+  <!-- 执行日志 -->
+  <view class="logs-section" wx:if="{{showLogs}}">
+    <view class="logs-title">最近执行日志</view>
+    <view class="logs-loading" wx:if="{{logsLoading}}">加载中...</view>
+    <view class="log-item {{item.success ? 'log-ok' : 'log-fail'}}" wx:for="{{logs}}" wx:key="_id">
+      <view class="log-line1">
+        <text class="log-time">{{item.timeText}}</text>
+        <text class="log-tag">{{item.triggerText}}</text>
+        <text class="log-action">{{item.actionText}}</text>
+        <text class="log-result {{item.success ? 'ok' : 'fail'}}">{{item.success ? '成功' : '失败'}}</text>
+      </view>
+      <view class="log-line2">{{item.remark || item.username}}{{item.targetText}} — {{item.message}}</view>
+    </view>
+    <view class="empty" wx:if="{{!logsLoading && logs.length === 0}}">暂无日志</view>
+  </view>
+
+  <!-- 添加/编辑账号表单弹层 -->
+  <view class="form-mask" wx:if="{{formVisible}}" bindtap="onCancelForm">
+    <view class="form-panel" catchtap="noop">
+      <view class="form-title">{{editingId ? '编辑账号' : '添加账号'}}</view>
+
+      <view class="form-item">
+        <text class="form-label">备注名</text>
+        <input class="form-input" placeholder="如：我的花园（选填）" value="{{form.remark}}"
+               data-field="remark" bindinput="onFormInput"/>
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">ppgarden 账号</text>
+        <input class="form-input" placeholder="网站登录用户名" value="{{form.username}}"
+               data-field="username" bindinput="onFormInput"/>
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">密码</text>
+        <input class="form-input" password placeholder="{{editingId ? '留空表示不修改' : '网站登录密码'}}"
+               value="{{form.password}}" data-field="password" bindinput="onFormInput"/>
+      </view>
+
+      <view class="form-hint block">保存后在卡片中点击「从网站刷新花园」加载花园，再为每个花园配置每小时时段并打开定时开关。</view>
+
+      <view class="form-actions">
+        <button class="form-btn cancel" bindtap="onCancelForm">取消</button>
+        <button class="form-btn save" loading="{{saving}}" bindtap="onSaveAccount">保存</button>
+      </view>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "openapi": []
+  },
+  "triggers": [
+    {
+      "name": "ppgarden-timer-minute",
+      "type": "timer",
+      "config": "0 * * * * * *"
+    }
+  ]
+}

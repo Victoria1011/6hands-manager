@@ -1,0 +1,10 @@
+{
+  "name": "ppgardenTimer",
+  "version": "1.0.0",
+  "description": "云上花匠(ppgarden.top)托管账号定时启动/暂停",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~2.6.3",
+    "jsonwebtoken": "^8.5.1"
+  }
+}

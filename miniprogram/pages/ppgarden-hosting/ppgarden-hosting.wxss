@@ -149,3 +149,60 @@
   color: #a8abb2;
   margin-top: 24rpx;
 }
+
+/* ===== 网站最新动态 ===== */
+.activity-card {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 8rpx 24rpx;
+  box-shadow: 0 2rpx 10rpx rgba(31, 35, 41, 0.04);
+}
+
+.activity-item {
+  padding: 18rpx 0;
+  border-bottom: 1rpx solid #f2f3f5;
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.activity-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+}
+
+.activity-account {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #4e5969;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-time {
+  font-size: 22rpx;
+  color: #c0c4cc;
+  flex-shrink: 0;
+}
+
+.activity-text {
+  font-size: 26rpx;
+  color: #1f2329;
+  margin-top: 6rpx;
+  word-break: break-all;
+}
+
+.activity-garden {
+  color: #1677ff;
+}
+
+.activity-empty {
+  text-align: center;
+  font-size: 24rpx;
+  color: #c0c4cc;
+  padding: 20rpx 0;
+}

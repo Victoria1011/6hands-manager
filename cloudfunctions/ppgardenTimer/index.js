@@ -5,9 +5,10 @@
 //   - 网站同一账号同时只能托管一个花园（并发位=1），多个花园按小时错峰轮换
 //   - 每个「花园」独立配置每小时托管时段，如 [{start:0,stop:4},{start:30,stop:34}]
 //     表示每小时的 00~04 分、30~34 分托管该花园，其余时间暂停
-//   - 不同花园的时段不允许重叠（保存校验 + 运行时守卫），支持一键随机错峰分配
-//     （时段 4~5 分钟、间隔 25~30 分钟随机）
+//   - 同一账号下不同花园的时段不允许重叠（保存校验 + 运行时守卫），支持一键随机错峰分配
+//     （时段 4~5 分钟、间隔 25~30 分钟随机）；各托管账号相互独立，跨账号时段不构成冲突
 //   - 每个花园有独立的定时托管开关
+//   - 执行启停前先查询网站实际托管状态：已处于目标状态的操作直接跳过，避免冗余接口调用
 //
 // 登录策略：
 //   每个网站账号每天只登录一次（会话 Cookie 缓存到数据库），当天复用；
@@ -16,7 +17,10 @@
 // 手动模式（管理端小程序调用，需 token）：
 //   action: list / add / update / delete / logs / status
 //           loadGardens / setGardenConfig / autoAssignAll
-//           startGarden / pauseGarden / setMaster / runSchedule
+//           startGarden / pauseGarden / setMaster / runSchedule / siteActivity / gardenActivity
+//
+// 手动启动：手动启动的花园运行 MANUAL_RUN_MINUTES 分钟后由每分钟定时器自动暂停
+//   （日志 trigger = 'auto'，不受定时任务总开关影响）
 
 const cloud = require('wx-server-sdk')
 const https = require('https')
@@ -43,12 +47,14 @@ const MIN_WINDOW_MIN = 4    // 单时段最短（分钟）
 const MAX_WINDOW_MIN = 5    // 单时段最长（分钟）
 const MIN_GAP_MIN = 25      // 同花园两时段间隔最短（分钟）
 const MAX_GAP_MIN = 30      // 同花园两时段间隔最长（分钟）
-const MIN_CROSS_GAP_MIN = 3 // 与其它花园时段的最小间距（分钟）
+const MIN_CROSS_GAP_MIN = 3 // 同一账号内与其它花园时段的最小间距（分钟）
 const START_TOLERANCE_MIN = 2 // 错过整点后，start 分钟起 2 分钟内仍可补启动
 const STOP_TOLERANCE_MIN = 2  // 错过整点后，stop 分钟起 2 分钟内仍可补暂停
 
 const MAX_WINDOWS_PER_GARDEN = 6
 const MIN_WINDOW_DURATION = 2 // 手动设置时单时段最短时长（分钟）
+
+const MANUAL_RUN_MINUTES = 3 // 手动启动的花园运行多少分钟后自动暂停
 
 const TZ_OFFSET_MS = 8 * 3600 * 1000 // 东八区（Asia/Shanghai）
 const HTTP_TIMEOUT_MS = 20000
@@ -184,10 +190,18 @@ async function ensureGlobalState() {
 function httpRequest({ method = 'GET', path, body = null, cookie = null, timeoutMs = HTTP_TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     const postData = body ? JSON.stringify(body) : null
+    // 请求头与浏览器保持一致（站点在 Cloudflare 后面，头不一致可能被 bot 检测拦截）
     const headers = {
       'accept': 'application/json',
-      'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
-      'referer': 'https://' + PPG_HOST + '/'
+      'accept-language': 'zh-CN,zh;q=0.9',
+      'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+      'referer': 'https://' + PPG_HOST + '/',
+      'sec-ch-ua': '"Google Chrome";v="149", "Chromium";v="149", "Not(A:Brand";v="24"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"macOS"',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-origin'
     }
     if (postData) {
       headers['content-type'] = 'application/json'
@@ -352,6 +366,72 @@ async function ppHostingSummary(cookie) {
   return res.json
 }
 
+// 查询各花园当前托管状态，返回 { gardenId: state } 映射（state 取值见 STATE_TEXT）
+async function ppGardenStateMap(cookie) {
+  const json = await ppHostingSummary(cookie)
+  const map = {}
+  for (const g of (json && json.gardens) || []) {
+    map[g.gardenId] = g.state
+  }
+  return map
+}
+
+// ==================== 网站动态（最新动态日志） ====================
+// 花园「动态」日志：GET /api/activity?gardenId=xxx&limit=n
+// 返回 { gardenId, activity: [{ id, occurredAt(毫秒时间戳), summary(日志文本), detail(结构化详情) }] }
+async function ppActivityList(cookie, gardenId, limit) {
+  const n = Math.min(Math.max(Number(limit) || 20, 1), 50)
+  let path = '/api/activity?limit=' + n
+  if (gardenId) path += '&gardenId=' + encodeURIComponent(gardenId)
+  const res = await httpRequest({ path, cookie })
+  if (res.status === 401) {
+    const err = new Error('会话已失效')
+    err.status = 401
+    throw err
+  }
+  if (res.status !== 200 || !res.json) throw new Error('查询网站动态失败：HTTP ' + res.status)
+  return res.json
+}
+
+// 东八区时间文本（MM-DD HH:mm）
+function fmtCstMs(ms) {
+  const d = new Date(ms + TZ_OFFSET_MS)
+  return pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()) + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes())
+}
+
+// 把网站动态接口的返回归一化为 [{ id, timeMs, text, kind }]
+function normalizeSiteActivity(json) {
+  let list = []
+  if (Array.isArray(json)) {
+    list = json
+  } else if (json && typeof json === 'object') {
+    for (const key of ['activity', 'activities', 'items', 'logs', 'records', 'events', 'data', 'list']) {
+      if (Array.isArray(json[key])) { list = json[key]; break }
+    }
+  }
+
+  return list.map(it => {
+    if (!it || typeof it !== 'object') return { id: '', timeMs: null, text: String(it), kind: '' }
+
+    const rawTime = it.occurredAt || it.createdAt || it.created_at || it.time || it.timestamp
+    let timeMs = null
+    if (typeof rawTime === 'number') timeMs = rawTime < 1e12 ? rawTime * 1000 : rawTime
+    else if (typeof rawTime === 'string' && rawTime) {
+      const t = Date.parse(rawTime)
+      if (!isNaN(t)) timeMs = t
+    }
+
+    const text = it.summary || it.message || it.text || it.content || ''
+    const d = it.detail
+    return {
+      id: it.id == null ? '' : String(it.id),
+      timeMs,
+      text: String(text || (d && typeof d === 'object' ? JSON.stringify(d).slice(0, 200) : '')),
+      kind: d && typeof d === 'object' ? String(d.kind || '') : ''
+    }
+  })
+}
+
 // 网站内添加的花园列表（仅刷新名称信息，不影响各花园的时段配置）
 async function loadAndCacheGardens(acc, cookie) {
   const res = await httpRequest({ path: '/api/gardens', cookie })
@@ -430,20 +510,19 @@ function circularGap(a, b) {
   return Math.min(g1, g2)
 }
 
-// 收集所有花园已占用的时段 [{start, stop, ownerName}]（可排除某账号/某花园）
-function collectOccupied(allAccounts, exceptAccId, exceptGardenId) {
+// 收集同一托管账号下其它花园已占用的时段 [{start, stop, ownerName}]（可排除某花园）
+// 网站的并发托管位按账号独立计算，各托管账号相互独立，跨账号时段不构成冲突
+function collectOccupied(acc, exceptGardenId) {
   const occupied = []
-  for (const a of allAccounts) {
-    if (a.enabled === false) continue
-    const gardens = Array.isArray(a.gardenList) ? a.gardenList : []
-    const configs = a.gardenConfigs || {}
-    for (const g of gardens) {
-      if (a._id === exceptAccId && g.id === exceptGardenId) continue
-      const cfg = configs[g.id]
-      if (!cfg) continue
-      for (const w of (Array.isArray(cfg.windows) ? cfg.windows : [])) {
-        occupied.push({ start: w.start, stop: w.stop, ownerName: g.name || g.id })
-      }
+  if (!acc || acc.enabled === false) return occupied
+  const gardens = Array.isArray(acc.gardenList) ? acc.gardenList : []
+  const configs = acc.gardenConfigs || {}
+  for (const g of gardens) {
+    if (g.id === exceptGardenId) continue
+    const cfg = configs[g.id]
+    if (!cfg) continue
+    for (const w of (Array.isArray(cfg.windows) ? cfg.windows : [])) {
+      occupied.push({ start: w.start, stop: w.stop, ownerName: g.name || g.id })
     }
   }
   return occupied
@@ -512,24 +591,22 @@ function generateWindows(occupied) {
 }
 
 // ==================== 工作循环 ====================
-// 其它花园是否正在托管：时段覆盖当前分钟、本小时已执行过启动、且尚未执行暂停
-function isPeerHosting(allAccounts, exceptAccId, exceptGardenId, minuteOfHour, hourSlot) {
-  return allAccounts.some(a => {
-    if (a.enabled === false) return false
-    const gardens = Array.isArray(a.gardenList) ? a.gardenList : []
-    const configs = a.gardenConfigs || {}
-    return gardens.some(g => {
-      if (a._id === exceptAccId && g.id === exceptGardenId) return false
-      const cfg = configs[g.id]
-      if (!cfg || cfg.schedEnabled === false) return false
-      const wins = Array.isArray(cfg.windows) ? cfg.windows : []
-      return wins.some((w, wi) => {
-        if (!(minuteOfHour >= w.start && minuteOfHour <= w.stop)) return false
-        const key = g.id + '_' + wi
-        const started = (a.doneStart || {})[key] === hourSlot
-        const stopped = (a.doneStop || {})[key] === hourSlot
-        return started && !stopped
-      })
+// 同一账号下其它花园是否正在托管：时段覆盖当前分钟、本小时已执行过启动、且尚未执行暂停
+// （并发托管位按账号独立计算，只需检查同一账号内的其它花园）
+function isPeerHosting(acc, exceptGardenId, minuteOfHour, hourSlot) {
+  const gardens = Array.isArray(acc.gardenList) ? acc.gardenList : []
+  const configs = acc.gardenConfigs || {}
+  return gardens.some(g => {
+    if (g.id === exceptGardenId) return false
+    const cfg = configs[g.id]
+    if (!cfg || cfg.schedEnabled === false) return false
+    const wins = Array.isArray(cfg.windows) ? cfg.windows : []
+    return wins.some((w, wi) => {
+      if (!(minuteOfHour >= w.start && minuteOfHour <= w.stop)) return false
+      const key = g.id + '_' + wi
+      const started = (acc.doneStart || {})[key] === hourSlot
+      const stopped = (acc.doneStop || {})[key] === hourSlot
+      return started && !stopped
     })
   })
 }
@@ -580,6 +657,14 @@ async function executeGardenAction(acc, garden, action, wi, w, cookie, ctx, hour
     acc[memField][key] = hourSlot
     await markSlotDone(acc, memField, key, hourSlot)
 
+    // 定时暂停了手动启动的花园 → 清除自动暂停标记，避免到点重复暂停
+    if (!enabled && acc.manualStart && acc.manualStart.gardenId === garden.id) {
+      acc.manualStart = null
+      await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+        data: { manualStart: null }
+      }).catch(() => {})
+    }
+
     ctx.results.push({
       username: acc.username,
       remark: acc.remark || '',
@@ -618,7 +703,7 @@ async function executeGardenAction(acc, garden, action, wi, w, cookie, ctx, hour
 
 // 处理单个账号：确保会话 → 加载花园 → 按各花园时段执行启动/暂停
 async function processAccount(acc, ctx) {
-  const { allAccounts, today, nowC, results } = ctx
+  const { today, nowC, results } = ctx
   const minuteOfHour = nowC.getUTCMinutes()
   const hourSlot = hourSlotOf(nowC)
 
@@ -678,50 +763,152 @@ async function processAccount(acc, ctx) {
 
   if (!activeGardens.length) return { cookie }
 
+  // 收集本分钟到期的启停任务
+  const duePauses = []
+  const dueStarts = []
   for (const { g, cfg } of activeGardens) {
     for (let wi = 0; wi < cfg.windows.length; wi++) {
       const w = cfg.windows[wi]
       const key = g.id + '_' + wi
-      if ((acc.doneStop || {})[key] === hourSlot) continue
-      if (minuteOfHour >= w.stop && minuteOfHour < w.stop + STOP_TOLERANCE_MIN) {
-        await executeGardenAction(acc, g, 'pause', wi, w, cookie, ctx, hourSlot)
+      if ((acc.doneStop || {})[key] !== hourSlot &&
+          minuteOfHour >= w.stop && minuteOfHour < w.stop + STOP_TOLERANCE_MIN) {
+        duePauses.push({ g, wi, w, key })
+      }
+      if ((acc.doneStart || {})[key] !== hourSlot &&
+          minuteOfHour >= w.start && minuteOfHour < w.start + START_TOLERANCE_MIN) {
+        dueStarts.push({ g, wi, w, key })
       }
     }
   }
-  for (const { g, cfg } of activeGardens) {
-    for (let wi = 0; wi < cfg.windows.length; wi++) {
-      const w = cfg.windows[wi]
-      const key = g.id + '_' + wi
-      if ((acc.doneStart || {})[key] === hourSlot) continue
-      if (minuteOfHour >= w.start && minuteOfHour < w.start + START_TOLERANCE_MIN) {
-        // 运行时守卫：其它花园本小时已在其时段内启动且尚未暂停 → 本次跳过，下分钟重试
-        if (isPeerHosting(allAccounts, acc._id, g.id, minuteOfHour, hourSlot)) {
-          console.log('[PPGarden] 其它花园托管进行中，本次跳过启动:', acc.username, g.name)
-          continue
-        }
-        await executeGardenAction(acc, g, 'start', wi, w, cookie, ctx, hourSlot)
-      }
+
+  // 有到期任务时先查一次实际托管状态：已处于目标状态的操作直接跳过，不再调用启停接口
+  let stateMap = null
+  if (duePauses.length || dueStarts.length) {
+    try {
+      stateMap = await ppWithRetry(acc, cookie, c => ppGardenStateMap(c))
+    } catch (e) {
+      console.error('[PPGarden] 查询托管状态失败，将直接执行启停:', acc.username, e.message)
     }
+  }
+
+  // 先统一处理暂停：实际已是暂停状态（如本小时启动未执行/未成功）则只做标记，不调接口
+  for (const { g, wi, w, key } of duePauses) {
+    if (stateMap && stateMap[g.id] === 'paused') {
+      console.log('[PPGarden] 花园已是暂停状态，跳过暂停:', acc.username, g.name)
+      if (!acc.doneStop || typeof acc.doneStop !== 'object') acc.doneStop = {}
+      acc.doneStop[key] = hourSlot
+      await markSlotDone(acc, 'doneStop', key, hourSlot)
+      continue
+    }
+    await executeGardenAction(acc, g, 'pause', wi, w, cookie, ctx, hourSlot)
+  }
+  // 再处理启动：实际已在托管/排队中（受阻除外）则只做标记，不调接口
+  for (const { g, wi, w, key } of dueStarts) {
+    // 运行时守卫：同一账号下其它花园本小时已在其时段内启动且尚未暂停 → 本次跳过，下分钟重试
+    if (isPeerHosting(acc, g.id, minuteOfHour, hourSlot)) {
+      console.log('[PPGarden] 同账号其它花园托管进行中，本次跳过启动:', acc.username, g.name)
+      continue
+    }
+    const curState = stateMap ? stateMap[g.id] : null
+    if (curState && curState !== 'paused' && curState !== 'blocked') {
+      console.log('[PPGarden] 花园已在托管中，跳过启动:', acc.username, g.name, curState)
+      if (!acc.doneStart || typeof acc.doneStart !== 'object') acc.doneStart = {}
+      acc.doneStart[key] = hourSlot
+      await markSlotDone(acc, 'doneStart', key, hourSlot)
+      continue
+    }
+    await executeGardenAction(acc, g, 'start', wi, w, cookie, ctx, hourSlot)
   }
 
   return { cookie }
 }
 
-// 一次工作循环：遍历所有启用账号
-async function runCycle() {
+// ==================== 手动启动自动暂停 ====================
+// 遍历账号，把手动启动且已运行超过 MANUAL_RUN_MINUTES 分钟的花园暂停（由每分钟定时器调用）
+async function autoPauseExpiredManualStarts(accounts) {
+  const results = []
+  const now = Date.now()
+  for (const acc of accounts) {
+    if (acc.enabled === false) continue
+    const ms = acc.manualStart
+    if (!ms || !ms.gardenId || !ms.startAtMs) continue
+    const startAt = Number(ms.startAtMs) || 0
+    if (!startAt || now - startAt < MANUAL_RUN_MINUTES * 60 * 1000) continue
+
+    const name = ms.gardenName || gardenNameOf(acc, ms.gardenId) || '花园'
+    const runMinutes = Math.round((now - startAt) / 60000)
+
+    let success = true
+    let message = ''
+    try {
+      // 先查实际状态：已是暂停状态则无需再调接口，直接清除标记
+      const stateMap = await withSession(acc, c => ppGardenStateMap(c))
+      if (stateMap[ms.gardenId] === 'paused') {
+        message = '手动启动的花园「' + name + '」已是暂停状态，无需自动暂停'
+      } else {
+        const json = await withSession(acc, c => ppBulkHosting(c, false, [ms.gardenId]))
+        message = '手动启动的花园「' + name + '」已运行 ' + runMinutes + ' 分钟，自动暂停完成：' + summarizeBulk(json, false)
+      }
+    } catch (err) {
+      success = false
+      message = '手动启动的花园「' + name + '」自动暂停失败：' + (err.message || '未知错误')
+    }
+
+    console.log('[PPGarden] ' + (acc.remark || acc.username) + ' ' + message)
+    await saveLog({
+      accountId: acc._id,
+      username: acc.username,
+      remark: acc.remark || '',
+      gardenId: ms.gardenId,
+      gardenName: name,
+      action: 'pause',
+      trigger: 'auto',
+      success,
+      message,
+      detail: null,
+      createdAt: db.serverDate()
+    })
+    results.push({
+      username: acc.username,
+      remark: acc.remark || '',
+      gardenName: name,
+      action: 'pause',
+      success,
+      message
+    })
+
+    // 失败时保留标记下一分钟重试，连续 3 次失败则放弃并清除标记
+    const retries = (ms.retries || 0) + (success ? 0 : 1)
+    if (success || retries >= 3) {
+      await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+        data: { manualStart: null, updatedAt: db.serverDate() }
+      }).catch(() => {})
+    } else {
+      await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+        data: { 'manualStart.retries': retries }
+      }).catch(() => {})
+    }
+  }
+  return results
+}
+
+// 一次工作循环：遍历所有启用账号（可传入已加载的账号列表避免重复读取）
+async function runCycle(preloadedAccounts) {
   const nowC = nowCST()
   const today = cstDateStr(nowC)
 
-  let accounts = []
-  try {
-    accounts = await getAllDocs(ACCOUNTS_COLL)
-  } catch (e) {
-    console.error('[PPGarden] 读取账号集合失败:', e.message)
-    return []
+  let accounts = preloadedAccounts
+  if (!accounts) {
+    try {
+      accounts = await getAllDocs(ACCOUNTS_COLL)
+    } catch (e) {
+      console.error('[PPGarden] 读取账号集合失败:', e.message)
+      return []
+    }
   }
 
   const results = []
-  const ctx = { allAccounts: accounts, today, nowC, results }
+  const ctx = { today, nowC, results }
   for (const acc of accounts) {
     if (acc.enabled === false) continue
     try {
@@ -750,12 +937,21 @@ async function handleTimerTick() {
   await ensureCollections()
   const state = await ensureGlobalState()
 
+  // 先加载账号：手动启动的自动暂停检查不受总开关影响
+  let accounts = null
+  try {
+    accounts = await getAllDocs(ACCOUNTS_COLL)
+  } catch (e) {
+    console.error('[PPGarden] 读取账号集合失败:', e.message)
+  }
+  const autoResults = await autoPauseExpiredManualStarts(accounts || [])
+
   if (state.masterEnabled === false) {
-    return { skipped: 'master_disabled' }
+    return { skipped: 'master_disabled', results: autoResults }
   }
 
-  const results = await runCycle()
-  return { results }
+  const results = await runCycle(accounts)
+  return { results: autoResults.concat(results) }
 }
 
 // ==================== 手动操作处理 ====================
@@ -825,6 +1021,8 @@ async function handleAdd(event) {
       gardenLoadDate: null,
       gardenConfigs: {},
       hostingCache: null,
+      // 手动启动自动暂停标记 { gardenId, gardenName, startAtMs, retries }
+      manualStart: null,
       // 每小时去重标记（key = gardenId_时段序号）
       doneStart: {},
       doneStop: {},
@@ -925,11 +1123,11 @@ async function handleSetGardenConfig(event) {
     if (windows.length) {
       const v = validateWindows(windows)
       if (!v.ok) return { code: 400, message: v.error }
-      // 与其它花园（全库范围）的时段查重叠
-      const occupied = collectOccupied(await getAllDocs(ACCOUNTS_COLL), _id, gardenId)
+      // 与同一账号下其它花园的时段查重叠（各账号独立，跨账号不冲突）
+      const occupied = collectOccupied(acc, gardenId)
       const c = checkCrossConflict(occupied, windows)
       if (c.conflictName) {
-        return { code: 400, message: '时段与花园「' + c.conflictName + '」重叠，网站同一时间只能托管一个花园，请错开' }
+        return { code: 400, message: '时段与本账号花园「' + c.conflictName + '」重叠，同一账号同一时间只能托管一个花园，请错开' }
       }
       if (c.closeName) {
         warning = '（提示：与花园「' + c.closeName + '」的时段仅隔 ' + (c.minGap === null ? '-' : c.minGap) + ' 分钟，建议再错开一些）'
@@ -997,8 +1195,8 @@ async function handleAutoAssignAll(event) {
     return { code: 400, message: '尚未加载花园列表，请先点击「刷新花园」从网站获取' }
   }
 
-  // 已占用时段：其它账号的花园（本账号全部重新分配）
-  const occupied = collectOccupied(await getAllDocs(ACCOUNTS_COLL), _id, null)
+  // 已占用时段：本账号其它花园（本账号全部花园重新分配；各账号独立，跨账号不冲突）
+  const occupied = collectOccupied(acc, null)
 
   const configs = Object.assign({}, acc.gardenConfigs || {})
   const assigned = []
@@ -1031,7 +1229,8 @@ async function handleAutoAssignAll(event) {
   }
 }
 
-// 手动启动某个花园：先暂停该账号全部花园腾出托管位，再启动指定花园
+// 手动启动某个花园：暂停其它在托花园腾出托管位后启动指定花园
+// （先查实际托管状态：目标已在托管中则不重复启动，只暂停确实非暂停状态的花园）
 async function handleStartGarden(event) {
   const _id = event._id
   const gardenId = event.gardenId
@@ -1048,12 +1247,60 @@ async function handleStartGarden(event) {
 
   const name = gardenNameOf(acc, gardenId) || '花园'
   try {
-    const json = await withSession(acc, async c => {
-      // 先暂停全部花园，腾出唯一托管位（避免 concurrency_limit 受阻）
-      await ppBulkHosting(c, false)
-      return ppBulkHosting(c, true, [gardenId])
+    const result = await withSession(acc, async c => {
+      // 先查实际托管状态，避免冗余启停调用
+      let stateMap = null
+      try {
+        stateMap = await ppGardenStateMap(c)
+      } catch (e) {
+        stateMap = null // 状态未知时退回「暂停全部」的原逻辑
+      }
+
+      // 暂停其它在托花园，腾出唯一托管位（并发位=1）；只暂停确实非暂停状态的花园
+      if (stateMap) {
+        const busyOthers = Object.keys(stateMap).filter(id => id !== gardenId && stateMap[id] !== 'paused')
+        if (busyOthers.length) await ppBulkHosting(c, false, busyOthers)
+      } else {
+        // 状态查询失败：暂停全部花园兜底（避免 concurrency_limit 受阻）
+        await ppBulkHosting(c, false)
+      }
+
+      // 目标花园已在托管中（受阻状态除外）→ 不再重复启动
+      const targetState = stateMap ? stateMap[gardenId] : null
+      if (targetState && targetState !== 'paused' && targetState !== 'blocked') {
+        return { alreadyActive: true, json: null }
+      }
+      const json = await ppBulkHosting(c, true, [gardenId])
+      return { alreadyActive: false, json }
     })
-    const message = '启动花园「' + name + '」完成：' + summarizeBulk(json, true)
+
+    // 已在托管中：不重复调用启动，仅重置自动暂停计时
+    if (result.alreadyActive) {
+      const message = '花园「' + name + '」已在托管中，无需重复启动'
+      await saveLog({
+        accountId: acc._id,
+        username: acc.username,
+        remark: acc.remark || '',
+        gardenId,
+        gardenName: name,
+        action: 'start',
+        trigger: 'manual',
+        success: true,
+        message,
+        detail: null,
+        createdAt: db.serverDate()
+      })
+      await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+        data: {
+          manualStart: { gardenId, gardenName: name, startAtMs: Date.now(), retries: 0 },
+          updatedAt: db.serverDate()
+        }
+      }).catch(() => {})
+      return { code: 0, message }
+    }
+
+    const json = result.json
+    const message = '启动花园「' + name + '」完成：' + summarizeBulk(json, true) + '，' + MANUAL_RUN_MINUTES + ' 分钟后自动暂停'
 
     await saveLog({
       accountId: acc._id,
@@ -1068,6 +1315,14 @@ async function handleStartGarden(event) {
       detail: (json && json.summary) || null,
       createdAt: db.serverDate()
     })
+
+    // 记录手动启动时间，由每分钟定时器在到期后自动暂停
+    await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+      data: {
+        manualStart: { gardenId, gardenName: name, startAtMs: Date.now(), retries: 0 },
+        updatedAt: db.serverDate()
+      }
+    }).catch(() => {})
 
     return {
       code: 0,
@@ -1110,8 +1365,24 @@ async function handlePauseGarden(event) {
 
   const name = gardenNameOf(acc, gardenId) || '花园'
   try {
-    const json = await withSession(acc, c => ppBulkHosting(c, false, [gardenId]))
-    const message = '暂停花园「' + name + '」完成：' + summarizeBulk(json, false)
+    let skipped = false
+    const json = await withSession(acc, async c => {
+      // 先查实际状态：已是暂停状态则无需再调接口
+      let stateMap = null
+      try {
+        stateMap = await ppGardenStateMap(c)
+      } catch (e) {
+        stateMap = null
+      }
+      if (stateMap && stateMap[gardenId] === 'paused') {
+        skipped = true
+        return null
+      }
+      return ppBulkHosting(c, false, [gardenId])
+    })
+    const message = skipped
+      ? '花园「' + name + '」已是暂停状态，无需操作'
+      : '暂停花园「' + name + '」完成：' + summarizeBulk(json, false)
 
     await saveLog({
       accountId: acc._id,
@@ -1126,6 +1397,13 @@ async function handlePauseGarden(event) {
       detail: (json && json.summary) || null,
       createdAt: db.serverDate()
     })
+
+    // 手动暂停后清除自动暂停标记
+    if (acc.manualStart && acc.manualStart.gardenId === gardenId) {
+      await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+        data: { manualStart: null, updatedAt: db.serverDate() }
+      }).catch(() => {})
+    }
 
     return {
       code: 0,
@@ -1182,6 +1460,7 @@ async function handleStatus(event) {
     const items = (summary.gardens || []).map(g => ({
       gardenId: g.gardenId,
       name: nameMap[g.gardenId] || ('花园' + String(g.gardenId).slice(0, 8)),
+      state: g.state,
       stateText: (STATE_TEXT[g.state] || g.state) + (g.credentialExpired ? '(凭证过期)' : '')
     }))
 
@@ -1296,6 +1575,165 @@ async function handleHostingNow() {
   }
 }
 
+// 正在托管面板：按账号聚合（花园托管状态 + 执行日志首页）
+async function handleAccountPanel(event) {
+  await ensureCollections()
+  const logsLimit = Math.min(Math.max(Number(event.logsLimit) || 10, 1), 50)
+  const accounts = await getAllDocs(ACCOUNTS_COLL)
+
+  const out = []
+  const errors = []
+  for (const acc of accounts) {
+    if (acc.enabled === false) continue
+    const item = {
+      accountId: acc._id,
+      accountName: acc.remark || acc.username,
+      activeCount: 0,
+      logs: [],
+      logsComplete: false
+    }
+    // 该账号正在托管的花园数（用于「托管中」标记与日志动态刷新）
+    try {
+      const summary = await withSession(acc, c => ppHostingSummary(c))
+      item.activeCount = (summary.gardens || []).filter(g => HOSTING_ACTIVE_STATES.includes(g.state)).length
+    } catch (err) {
+      errors.push({ accountId: acc._id, accountName: item.accountName, message: err.message || '查询失败' })
+    }
+
+    // 该账号执行日志（首页）
+    try {
+      const page = await loadAccountLogs(acc._id, 0, logsLimit)
+      item.logs = page.logs
+      item.logsComplete = page.complete
+    } catch (e) { /* 日志读取失败不影响状态展示 */ }
+
+    out.push(item)
+  }
+
+  // 有活跃花园的账号排前面，其余按名称排序
+  out.sort((a, b) => {
+    const aa = a.activeCount > 0 ? 0 : 1
+    const bb = b.activeCount > 0 ? 0 : 1
+    if (aa !== bb) return aa - bb
+    return a.accountName.localeCompare(b.accountName)
+  })
+
+  return { code: 0, message: 'success', data: { accounts: out, errors } }
+}
+
+// 读取某账号执行日志（按时间倒序分页；beforeMs 向更早翻页，afterMs 拉取更新）
+async function loadAccountLogs(accountId, beforeMs, limit, afterMs) {
+  let cond = { accountId }
+  if (beforeMs > 0) cond.createdAt = _.lt(new Date(beforeMs))
+  else if (afterMs > 0) cond.createdAt = _.gt(new Date(afterMs))
+  const res = await db.collection(LOGS_COLL)
+    .where(cond)
+    .orderBy('createdAt', 'desc')
+    .limit(limit + 1)
+    .get()
+  const rows = (res.data || []).slice(0, limit)
+  return {
+    logs: rows.map(l => ({
+      id: l._id,
+      ts: l.createdAt ? new Date(l.createdAt).getTime() : 0,
+      timeText: l.createdAt ? fmtCstMs(new Date(l.createdAt).getTime()) : '',
+      actionText: l.action === 'start' ? '启动托管' : l.action === 'pause' ? '暂停托管' : '登录',
+      triggerText: l.trigger === 'timer' ? '定时' : l.trigger === 'auto' ? '自动暂停' : l.trigger === 'redeem' ? '兑换码' : '手动',
+      success: !!l.success,
+      message: l.message || ''
+    })),
+    complete: (res.data || []).length <= limit
+  }
+}
+
+// 分页加载某账号更早的执行日志
+async function handleAccountLogs(event) {
+  const accountId = event.accountId
+  if (!accountId) return { code: 400, message: '缺少 accountId' }
+  await ensureCollections()
+  const limit = Math.min(Math.max(Number(event.limit) || 10, 1), 50)
+  const beforeMs = Number(event.before) || 0
+  const afterMs = Number(event.after) || 0
+  try {
+    const page = await loadAccountLogs(accountId, beforeMs, limit, afterMs)
+    return { code: 0, message: 'success', data: page }
+  } catch (err) {
+    return { code: 500, message: err.message || '加载日志失败' }
+  }
+}
+
+// 汇总所有账号「正在托管」花园的动态日志（网站动态接口按花园查询，先取托管状态再逐花园拉取）
+async function handleSiteActivity(event) {
+  await ensureCollections()
+  const limit = Math.min(Number(event.limit) || 30, 100)
+  const perGarden = Math.min(Number(event.perGarden) || 10, 20)
+  const accounts = await getAllDocs(ACCOUNTS_COLL)
+
+  const items = []
+  const errors = []
+  for (const acc of accounts) {
+    if (acc.enabled === false) continue
+    let stateMap = null
+    try {
+      stateMap = await withSession(acc, c => ppGardenStateMap(c))
+    } catch (err) {
+      errors.push({ accountName: acc.remark || acc.username, message: err.message || '查询失败' })
+      continue
+    }
+    // 只拉非暂停状态花园的动态（通常并发位=1，每账号最多 1 个）
+    const activeIds = Object.keys(stateMap).filter(id => stateMap[id] && stateMap[id] !== 'paused').slice(0, 3)
+    for (const gid of activeIds) {
+      try {
+        const json = await withSession(acc, c => ppActivityList(c, gid, perGarden))
+        for (const it of normalizeSiteActivity(json)) {
+          items.push(Object.assign({}, it, {
+            accountName: acc.remark || acc.username,
+            gardenName: gardenNameOf(acc, gid) || ('花园' + String(gid).slice(0, 8))
+          }))
+        }
+      } catch (e) { /* 单花园失败不影响其它 */ }
+    }
+  }
+
+  items.sort((a, b) => (b.timeMs || 0) - (a.timeMs || 0))
+  const trimmed = items.slice(0, limit)
+  trimmed.forEach((it, i) => {
+    it.idx = i
+    it.timeText = it.timeMs ? fmtCstMs(it.timeMs) : ''
+  })
+
+  return { code: 0, message: 'success', data: { items: trimmed, errors } }
+}
+
+// 单个花园的网站「动态」日志（管理页「日志」按钮底部弹窗用）
+async function handleGardenActivity(event) {
+  const _id = event._id
+  const gardenId = event.gardenId
+  if (!_id || !gardenId) return { code: 400, message: '缺少 _id 或 gardenId' }
+
+  let acc
+  try {
+    const res = await db.collection(ACCOUNTS_COLL).doc(_id).get()
+    acc = res.data
+  } catch (e) {
+    return { code: 404, message: '账号不存在' }
+  }
+  if (!acc) return { code: 404, message: '账号不存在' }
+
+  try {
+    const limit = Math.min(Number(event.limit) || 20, 50)
+    const json = await withSession(acc, c => ppActivityList(c, gardenId, limit))
+    const items = normalizeSiteActivity(json)
+    items.forEach((it, i) => {
+      it.idx = i
+      it.timeText = it.timeMs ? fmtCstMs(it.timeMs) : ''
+    })
+    return { code: 0, message: 'success', data: { items } }
+  } catch (err) {
+    return { code: 500, message: err.message || '查询动态失败' }
+  }
+}
+
 // ==================== 入口 ====================
 exports.main = async (event, context) => {
   // ===== 定时触发器模式（每分钟唤醒，按花园时段调度） =====
@@ -1348,6 +1786,14 @@ exports.main = async (event, context) => {
         return await handleStatus(event)
       case 'hostingNow':
         return await handleHostingNow()
+      case 'accountPanel':
+        return await handleAccountPanel(event)
+      case 'accountLogs':
+        return await handleAccountLogs(event)
+      case 'siteActivity':
+        return await handleSiteActivity(event)
+      case 'gardenActivity':
+        return await handleGardenActivity(event)
       case 'logs':
         return await handleLogs(event)
       case 'runSchedule': {

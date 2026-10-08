@@ -26,13 +26,30 @@ const CHANNEL_TEXT = {
   douyin: '抖音'
 }
 
+// 网站托管状态中代表「正在托管/排队」的状态（此时重复启动无意义）
+const GARDEN_ACTIVE_STATES = ['armed', 'managed', 'running', 'schedule_wait', 'finishing']
+
+// 网站托管状态 → 中文
+const GARDEN_STATE_TEXT = {
+  paused: '已暂停',
+  armed: '已就绪',
+  managed: '托管中',
+  running: '运行中',
+  schedule_wait: '等待定时',
+  finishing: '收尾中',
+  blocked: '受阻'
+}
+
 Page({
   data: {
     loading: false,
     accounts: [],
-    logs: [],
-    showLogs: false,
-    logsLoading: false,
+    // Tab：accounts 托管账号 / logs 执行日志（每个账号一张卡片）
+    activeTab: 'accounts',
+    panelLoading: false,
+    panelError: '',
+    panelAccounts: [],
+    panelErrors: [],
     // 定时任务总开关（停止/恢复自动启停）
     masterEnabled: true,
     masterSwitching: false,
@@ -44,7 +61,8 @@ Page({
     // 花园时段编辑器（同时只打开一个）：{ key: '账号下标_花园下标', accountId, gardenId, windows: [] }
     gardenEditor: null,
     savingGardenWindows: false,
-    autoAssigning: false
+    // 花园动态日志底部弹窗（auto = 托管中，打开期间每 2 秒自动刷新；refreshing = 刷新请求进行中）
+    logSheet: { visible: false, loading: false, refreshing: false, gardenName: '', items: [], auto: false, accountId: '', gardenId: '' },
   },
 
   onLoad() {
@@ -53,6 +71,16 @@ Page({
 
   onShow() {
     this.checkIsLoggedIn()
+  },
+
+  onHide() {
+    this.stopLogsTimer()
+    this.stopGardenLogTimer()
+  },
+
+  onUnload() {
+    this.stopLogsTimer()
+    this.stopGardenLogTimer()
   },
 
   checkIsLoggedIn() {
@@ -70,13 +98,23 @@ Page({
     return true
   },
 
-  // ===== 云函数调用封装 =====
+  // ===== 云函数调用封装（所有请求/响应均打印日志） =====
   callApi(action, extra = {}) {
+    console.log('[请求] ppgardenTimer.' + action, JSON.stringify(extra || {}))
     return app.globalData.cloud.callFunction({
       name: 'ppgardenTimer',
       data: Object.assign({ token: app.getToken(), action }, extra)
     }).then(res => {
-      return res.result || { code: 500, message: '空响应' }
+      const result = res.result || { code: 500, message: '空响应' }
+      console.log(
+        '[响应] ppgardenTimer.' + action,
+        'code=' + result.code,
+        JSON.stringify(result.data || result.message || '').slice(0, 500)
+      )
+      return result
+    }).catch(err => {
+      console.error('[请求异常] ppgardenTimer.' + action, err && err.message)
+      throw err
     })
   },
 
@@ -113,9 +151,19 @@ Page({
     const configs = a.gardenConfigs || {}
     const hc = a.hostingCache || null
 
+    // 花园实时托管状态（用于启停按钮可用性；状态未知时两个按钮都可用）
+    const stateMap = {}
+    if (hc && Array.isArray(hc.states)) {
+      for (const s of hc.states) {
+        if (s && s.gardenId && s.state) stateMap[s.gardenId] = s.state
+      }
+    }
+
     const gardenRows = gardenList.map(g => {
       const cfg = configs[g.id] || {}
       const windows = Array.isArray(cfg.windows) ? cfg.windows : []
+      const st = stateMap[g.id]
+      const active = st ? GARDEN_ACTIVE_STATES.indexOf(st) !== -1 : null
       return {
         gardenId: g.id,
         name: g.name || g.id,
@@ -124,7 +172,12 @@ Page({
         windowsText: windows.map(w => pad(w.start) + '~' + pad(w.stop)).join('、'),
         hasWindows: windows.length > 0,
         busyStart: false,
-        busyPause: false
+        busyPause: false,
+        // 正在托管 → 启动禁用/暂停可用；未托管 → 暂停禁用/启动可用；未知 → 都可用
+        canStart: active === null ? true : !active,
+        canPause: active === null ? true : active,
+        // 实时托管状态文字（显示在花园卡片右上角）
+        stateText: st ? (GARDEN_STATE_TEXT[st] || st) : ''
       }
     })
 
@@ -136,18 +189,107 @@ Page({
       // 状态直接展示：优先用云端缓存，可手动/自动刷新
       states: hc && Array.isArray(hc.states) ? hc.states : [],
       statusSummary: hc ? hc.summaryText : '',
-      statusUpdatedAtText: hc && hc.updatedAtMs ? fmtShort(hc.updatedAtMs) : ''
+      statusUpdatedAtText: hc && hc.updatedAtMs ? fmtShort(hc.updatedAtMs) : '',
+      // 账号级「托管中」标记：任一花园在托即生效（卡片加高亮描边）
+      anyHosting: gardenRows.some(r => r.canStart === false)
     })
   },
 
   onRefresh() {
     this.loadAccounts()
-    if (this.data.showLogs) this.loadLogs()
+    if (this.data.activeTab === 'logs') this.loadPanel()
   },
 
-  // 查看正在托管的花园
-  onHostingNow() {
-    wx.navigateTo({ url: '/pages/ppgarden-hosting/ppgarden-hosting' })
+  // ===== Tab 切换 =====
+  onSwitchTab(e) {
+    const tab = e.currentTarget.dataset.tab
+    this.setData({ activeTab: tab })
+    if (tab === 'logs') {
+      this.loadPanel()
+      this.startLogsTimer()
+    } else {
+      this.stopLogsTimer()
+    }
+  },
+
+  // 拉取正在托管面板（按账号聚合：花园状态 + 日志首页）
+  async loadPanel() {
+    if (this.data.panelLoading) return
+    this.setData({ panelLoading: true })
+    try {
+      const res = await this.callApi('accountPanel', { logsLimit: 10 })
+      if (res.code !== 0) throw new Error(res.message || '加载失败')
+      this.setData({
+        panelAccounts: (res.data && res.data.accounts) || [],
+        panelErrors: (res.data && res.data.errors) || [],
+        panelError: ''
+      })
+    } catch (err) {
+      console.error('[Ppgarden] 执行日志面板加载失败:', err)
+      this.setData({ panelError: err.message || '加载失败' })
+    } finally {
+      this.setData({ panelLoading: false })
+    }
+  },
+
+  // 卡片内日志上拉分页加载
+  async onLoadMoreLogs(e) {
+    const ai = e.currentTarget.dataset.ai
+    const acc = this.data.panelAccounts[ai]
+    if (!acc || acc.logsLoading || acc.logsComplete) return
+    const cursor = acc.logs.length ? acc.logs[acc.logs.length - 1].ts : 0
+    this.setData({ ['panelAccounts[' + ai + '].logsLoading']: true })
+    try {
+      const res = await this.callApi('accountLogs', { accountId: acc.accountId, before: cursor, limit: 10 })
+      if (res.code !== 0) throw new Error(res.message || '加载失败')
+      const more = (res.data && res.data.logs) || []
+      const complete = !!(res.data && res.data.complete)
+      this.setData({
+        ['panelAccounts[' + ai + '].logs']: acc.logs.concat(more),
+        ['panelAccounts[' + ai + '].logsComplete']: complete
+      })
+    } catch (err) {
+      wx.showToast({ title: err.message || '加载失败', icon: 'none' })
+    } finally {
+      this.setData({ ['panelAccounts[' + ai + '].logsLoading']: false })
+    }
+  },
+
+  // 日志动态刷新：正在托管的账号每 10 秒补拉最新日志
+  startLogsTimer() {
+    if (this._logsTimer) return
+    this._logsTimer = setInterval(() => this.refreshNewLogs(), 10000)
+  },
+
+  stopLogsTimer() {
+    if (this._logsTimer) {
+      clearInterval(this._logsTimer)
+      this._logsTimer = null
+    }
+  },
+
+  // 只补拉「托管中」账号的新日志（按最新一条时间作游标），不翻动已有分页
+  async refreshNewLogs() {
+    const accounts = this.data.panelAccounts
+    for (let ai = 0; ai < accounts.length; ai++) {
+      const acc = accounts[ai]
+      if (!acc.activeCount || acc.logsLoading) continue
+      try {
+        const after = acc.logs.length ? acc.logs[0].ts : 0
+        const res = await this.callApi('accountLogs', { accountId: acc.accountId, after, limit: 20 })
+        if (res.code !== 0) continue
+        const newer = (res.data && res.data.logs) || []
+        if (!newer.length) continue
+        const cur = this.data.panelAccounts[ai]
+        if (!cur || cur.accountId !== acc.accountId) continue
+        const exist = {}
+        for (const l of cur.logs) exist[l.id] = true
+        const add = newer.filter(l => !exist[l.id])
+        if (add.length) {
+          this.setData({ ['panelAccounts[' + ai + '].logs']: add.concat(cur.logs) })
+        }
+      } catch (e) { /* 静默，下一轮再取 */ }
+    }
   },
 
   // 页面加载后静默补齐常显数据（状态缓存 / 花园列表）
@@ -306,25 +448,6 @@ Page({
     } catch (err) {
       this.setData({ ['accounts[' + index + '].gardensLoading']: false })
       if (!silent) wx.showToast({ title: err.message || '加载花园列表失败', icon: 'none' })
-    }
-  },
-
-  // ===== 一键分配：为全部花园随机错峰生成每小时时段 =====
-  async onAutoAssignAll(e) {
-    const index = e.currentTarget.dataset.index
-    const acc = this.data.accounts[index]
-    if (!acc || this.data.autoAssigning) return
-
-    this.setData({ autoAssigning: true })
-    try {
-      const res = await this.callApi('autoAssignAll', { _id: acc._id })
-      if (res.code !== 0) throw new Error(res.message || '分配失败')
-      wx.showModal({ title: '分配完成', content: res.message, showCancel: false })
-      this.loadAccounts()
-    } catch (err) {
-      wx.showModal({ title: '自动分配失败', content: err.message || '请稍后重试', showCancel: false })
-    } finally {
-      this.setData({ autoAssigning: false })
     }
   },
 
@@ -517,12 +640,32 @@ Page({
       // 防止等待期间账号列表刷新导致错位
       const nowCur = this.data.accounts[index]
       if (!nowCur || nowCur._id !== id) return
-      this.setData({
+      // 同步刷新花园行启停按钮可用性（不触碰 busy 标记）
+      const stateMap = {}
+      for (const s of (res.data.gardens || [])) {
+        if (s && s.gardenId && s.state) stateMap[s.gardenId] = s.state
+      }
+      const patch = {
         ['accounts[' + index + '].statusSummary']: res.data.summaryText,
         ['accounts[' + index + '].states']: res.data.gardens || [],
         ['accounts[' + index + '].statusLoading']: false,
         ['accounts[' + index + '].statusUpdatedAtText']: fmtShort(Date.now())
+      }
+      const rows = (this.data.accounts[index] && this.data.accounts[index].gardenRows) || []
+      rows.forEach((row, ri) => {
+        const st = stateMap[row.gardenId]
+        if (!st) return
+        const active = GARDEN_ACTIVE_STATES.indexOf(st) !== -1
+        patch['accounts[' + index + '].gardenRows[' + ri + '].canStart'] = !active
+        patch['accounts[' + index + '].gardenRows[' + ri + '].canPause'] = active
+        patch['accounts[' + index + '].gardenRows[' + ri + '].stateText'] = GARDEN_STATE_TEXT[st] || st
       })
+      // 账号级「托管中」标记（任一花园在托即生效）
+      patch['accounts[' + index + '].anyHosting'] = rows.some(row => {
+        const st = stateMap[row.gardenId]
+        return st ? GARDEN_ACTIVE_STATES.indexOf(st) !== -1 : false
+      })
+      this.setData(patch)
     } catch (err) {
       const failCur = this.data.accounts[index]
       if (!failCur || failCur._id !== id) return
@@ -534,28 +677,71 @@ Page({
     }
   },
 
-  // ===== 执行日志 =====
-  async onToggleLogs() {
-    const show = !this.data.showLogs
-    this.setData({ showLogs: show })
-    if (show) this.loadLogs()
+  // ===== 花园动态日志（底部弹窗） =====
+  async onGardenLogs(e) {
+    const { index, ri, id, gardenId, name } = e.currentTarget.dataset
+    const acc = this.data.accounts[index]
+    if (!acc) return
+    const row = acc.gardenRows && acc.gardenRows[ri]
+    if (!row || row.gardenId !== gardenId) return
+    // 该花园正在托管中 → 弹窗打开期间每 2 秒自动刷新
+    const auto = row.canStart === false
+    this.setData({
+      logSheet: { visible: true, loading: true, gardenName: name || row.name, items: [], auto, accountId: id, gardenId }
+    })
+    try {
+      const res = await this.callApi('gardenActivity', { _id: id, gardenId, limit: 20 })
+      if (res.code !== 0) throw new Error(res.message || '加载失败')
+      // 防止等待期间弹窗已关闭
+      if (!this.data.logSheet.visible) return
+      this.setData({
+        'logSheet.items': (res.data && res.data.items) || [],
+        'logSheet.loading': false
+      })
+      if (auto) this.startGardenLogTimer()
+    } catch (err) {
+      if (!this.data.logSheet.visible) return
+      this.setData({ 'logSheet.loading': false })
+      wx.showToast({ title: err.message || '加载失败', icon: 'none' })
+    }
   },
 
-  async loadLogs() {
-    this.setData({ logsLoading: true })
+  onCloseGardenLogs() {
+    this.stopGardenLogTimer()
+    this.setData({ 'logSheet.visible': false })
+  },
+
+  startGardenLogTimer() {
+    if (this._gardenLogTimer) return
+    this._gardenLogTimer = setInterval(() => this.refreshGardenLogs(), 2000)
+  },
+
+  stopGardenLogTimer() {
+    if (this._gardenLogTimer) {
+      clearInterval(this._gardenLogTimer)
+      this._gardenLogTimer = null
+    }
+  },
+
+  // 弹窗内增量补拉最新动态（合并去重，不打断已加载内容）
+  async refreshGardenLogs() {
+    const sheet = this.data.logSheet
+    if (!sheet.visible || sheet.loading || sheet.refreshing || !sheet.auto || !sheet.accountId) return
+    this.setData({ 'logSheet.refreshing': true })
     try {
-      const res = await this.callApi('logs', { limit: 50 })
-      if (res.code !== 0) throw new Error(res.message || '加载失败')
-      const logs = ((res.data && res.data.logs) || []).map(l => Object.assign({}, l, {
-        timeText: fmtShort(l.createdAtMs),
-        actionText: l.action === 'start' ? '启动托管' : l.action === 'pause' ? '暂停托管' : '登录',
-        triggerText: l.trigger === 'timer' ? '定时' : '手动',
-        targetText: l.gardenName ? '「' + l.gardenName + '」' : ''
-      }))
-      this.setData({ logs, logsLoading: false })
-    } catch (err) {
-      this.setData({ logsLoading: false })
-      wx.showToast({ title: err.message || '日志加载失败', icon: 'none' })
+      const res = await this.callApi('gardenActivity', { _id: sheet.accountId, gardenId: sheet.gardenId, limit: 20 })
+      if (res.code !== 0) return
+      if (!this.data.logSheet.visible) return
+      const fresh = (res.data && res.data.items) || []
+      const cur = this.data.logSheet
+      const exist = {}
+      for (const it of cur.items) exist[it.id] = true
+      const add = fresh.filter(it => !exist[it.id])
+      if (add.length) {
+        this.setData({ 'logSheet.items': add.concat(cur.items).slice(0, 50) })
+      }
+    } catch (e) { /* 静默，下一轮再取 */     } finally {
+      if (this.data.logSheet.visible) this.setData({ 'logSheet.refreshing': false })
     }
   }
 })

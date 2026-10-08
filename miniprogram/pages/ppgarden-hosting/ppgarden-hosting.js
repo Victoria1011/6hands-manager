@@ -18,7 +18,8 @@ Page({
     hosting: [],  // 正在托管
     waiting: [],  // 其它状态（已就绪/等待定时/受阻）
     errors: [],
-    updatedAtText: ''
+    updatedAtText: '',
+    activity: []  // 网站「动态-最新动态」日志
   },
 
   onLoad() {
@@ -59,6 +60,7 @@ Page({
       return
     }
     this.setData({ loading: true })
+    this.loadActivity() // 并行拉取网站最新动态，失败不影响主列表
     try {
       const res = await this.callApi('hostingNow')
       if (res.code !== 0) throw new Error(res.message || '加载失败')
@@ -78,6 +80,18 @@ Page({
 
   onPullDownRefresh() {
     this.load().then(() => wx.stopPullDownRefresh())
+  },
+
+  // 网站「动态-最新动态」日志（云函数调 /api/activity 汇总各账号）
+  async loadActivity() {
+    try {
+      const res = await this.callApi('siteActivity', { limit: 30 })
+      if (res.code !== 0) throw new Error(res.message || '加载失败')
+      this.setData({ activity: (res.data && res.data.items) || [] })
+    } catch (err) {
+      console.error('[PpgardenHosting] 加载网站动态失败:', err)
+      this.setData({ activity: [] })
+    }
   },
 
   // 快捷暂停某个正在托管的花园

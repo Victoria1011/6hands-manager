@@ -2,31 +2,38 @@
   <!-- 头部 -->
   <view class="header">
     <view class="header-title">花匠托管</view>
-    <view class="master-wrap">
-      <text class="master-label">定时任务</text>
-      <switch checked="{{masterEnabled}}" color="#07c160"
-              disabled="{{masterSwitching}}" bindchange="onToggleMaster"/>
+    <view class="header-right">
+      <button class="mini-btn" size="mini" bindtap="onAddTap">＋ 添加账号</button>
+      <view class="master-wrap">
+        <text class="master-label">定时任务</text>
+        <switch checked="{{masterEnabled}}" color="#07c160"
+                disabled="{{masterSwitching}}" bindchange="onToggleMaster"/>
+      </view>
     </view>
   </view>
-  <view class="header-actions sub">
-    <button class="mini-btn site" size="mini" bindtap="onHostingNow">正在托管</button>
-    <button class="mini-btn ghost" size="mini" bindtap="onToggleLogs">{{showLogs ? '隐藏日志' : '执行日志'}}</button>
-    <button class="mini-btn primary" size="mini" bindtap="onAddTap">＋ 添加账号</button>
-    <button class="mini-btn ghost" size="mini" bindtap="onRefresh" loading="{{loading}}">刷新</button>
-  </view>
 
-  <view class="tip-bar">
-    <text class="tip-icon">⏱</text>
-    <text class="tip-text">三步配置：① 添加账号 ② 加载花园并为每个花园设置每小时时段（或一键分配，自动错开互不重叠）③ 打开各花园的定时开关。到点自动启动/暂停，也可随时手动启停单个花园。</text>
+  <!-- Tab 栏 -->
+  <view class="tab-bar">
+    <view class="tabs">
+      <view class="tab {{activeTab === 'accounts' ? 'active' : ''}}" data-tab="accounts" bindtap="onSwitchTab">托管账号</view>
+      <view class="tab {{activeTab === 'logs' ? 'active' : ''}}" data-tab="logs" bindtap="onSwitchTab">执行日志</view>
+    </view>
+    <view class="tab-actions">
+      <button class="mini-btn ghost" size="mini" bindtap="onRefresh" loading="{{loading}}">刷新</button>
+    </view>
   </view>
 
   <!-- 账号列表 -->
-  <view class="account-list">
+  <view class="account-list" wx:if="{{activeTab === 'accounts'}}">
     <view class="account-card" wx:for="{{accounts}}" wx:key="_id">
       <view class="card-top">
         <view class="account-name">
           <text class="name-text">{{item.remark || item.username}}</text>
           <text class="session-badge {{item.sessionOk ? 'ok' : (item.loginError ? 'bad' : 'idle')}}">{{item.sessionOk ? '今日已登录' : (item.loginError ? '登录失败' : '待登录')}}</text>
+          <view class="title-icon-btns">
+            <view class="icon-btn" data-index="{{index}}" catchtap="onEditTap">✏️</view>
+            <view class="icon-btn icon-danger" data-id="{{item._id}}" data-name="{{item.remark || item.username}}" catchtap="onDeleteTap">🗑️</view>
+          </view>
         </view>
         <text class="reload-gardens" data-index="{{index}}" catchtap="onReloadGardens">{{item.gardensLoading ? '花园刷新中...' : '从网站刷新花园'}}</text>
       </view>
@@ -37,11 +44,11 @@
       <view class="garden-picker">
         <view class="garden-picker-head">
           <text class="garden-title">花园托管配置</text>
-          <text class="reload-gardens assign {{autoAssigning ? 'action-disabled' : ''}}"
-                data-index="{{index}}" catchtap="onAutoAssignAll">{{autoAssigning ? '分配中...' : '🎲 一键分配时段'}}</text>
+          <text class="status-refresh" data-id="{{item._id}}" data-index="{{index}}"
+                catchtap="onRefreshStatus">{{item.statusLoading ? '状态刷新中...' : '刷新状态'}}</text>
         </view>
 
-        <view class="garden-item" wx:for="{{item.gardenRows}}" wx:for-item="gr" wx:for-index="ri" wx:key="gardenId">
+        <view class="garden-item {{gr.canStart === false ? 'hosting' : ''}}" wx:for="{{item.gardenRows}}" wx:for-item="gr" wx:for-index="ri" wx:key="gardenId">
           <view class="garden-row-line">
             <view class="garden-sched-switch">
               <switch checked="{{gr.schedEnabled}}" color="#07c160"
@@ -57,17 +64,23 @@
                 定时：{{gr.hasWindows ? '每小时 ' + gr.windowsText + ' 分' : '未设置时段'}}
               </view>
             </view>
-            <view class="garden-row-actions">
-              <button size="mini" class="act-btn act-start"
-                      data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
-                      bindtap="onGardenRun" loading="{{gr.busyStart}}" disabled="{{gr.busyPause}}">启动</button>
-              <button size="mini" class="act-btn act-pause"
-                      data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
-                      bindtap="onGardenPause" loading="{{gr.busyPause}}" disabled="{{gr.busyStart}}">暂停</button>
-              <button size="mini" class="act-btn"
-                      data-index="{{index}}" data-ri="{{ri}}"
-                      bindtap="onEditGardenWindows">{{gardenEditor.key === index + '_' + ri ? '收起' : '改时段'}}</button>
-            </view>
+            <text class="garden-state-badge {{gr.canStart === false ? 'on' : 'off'}}" wx:if="{{gr.stateText}}">{{gr.stateText}}</text>
+          </view>
+
+          <!-- 启动 / 暂停 / 改时段：放在花园信息下方，横向一行 -->
+          <view class="garden-row-actions">
+            <button size="mini" class="act-btn act-start"
+                    data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
+                    bindtap="onGardenRun" loading="{{gr.busyStart}}" disabled="{{gr.busyStart || gr.busyPause || !gr.canStart}}">启动</button>
+            <button size="mini" class="act-btn act-pause"
+                    data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
+                    bindtap="onGardenPause" loading="{{gr.busyPause}}" disabled="{{gr.busyStart || gr.busyPause || !gr.canPause}}">暂停</button>
+            <button size="mini" class="act-btn act-log"
+                    data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}" data-name="{{gr.name}}"
+                    bindtap="onGardenLogs">日志</button>
+            <button size="mini" class="act-btn"
+                    data-index="{{index}}" data-ri="{{ri}}"
+                    bindtap="onEditGardenWindows">{{gardenEditor.key === index + '_' + ri ? '收起' : '定时'}}</button>
           </view>
 
           <!-- 花园时段编辑器 -->
@@ -96,31 +109,6 @@
         </view>
       </view>
 
-      <!-- 托管状态（常显，可刷新） -->
-      <view class="status-box">
-        <view class="status-head">
-          <text class="status-title">托管状态</text>
-          <view class="status-head-right">
-            <text class="status-updated" wx:if="{{item.statusUpdatedAtText}}">{{item.statusUpdatedAtText}} 更新</text>
-            <text class="status-refresh" data-id="{{item._id}}" data-index="{{index}}"
-                  catchtap="onRefreshStatus">{{item.statusLoading ? '刷新中...' : '刷新'}}</text>
-          </view>
-        </view>
-        <view class="status-summary" wx:if="{{item.statusSummary}}">{{item.statusSummary}}</view>
-        <view class="status-loading" wx:if="{{item.statusLoading}}">查询中...</view>
-        <view class="status-garden" wx:for="{{item.states}}" wx:for-item="g" wx:key="gardenId">
-          <text class="garden-name">{{g.name}}</text>
-          <text class="garden-state">{{g.stateText}}</text>
-        </view>
-        <view class="status-empty" wx:if="{{!item.statusSummary && !item.statusLoading}}">暂无状态，点击右上角「刷新」获取</view>
-      </view>
-
-      <view class="card-actions">
-        <button size="mini" class="act-btn" data-index="{{index}}" bindtap="onEditTap">编辑账号</button>
-        <button size="mini" class="act-btn act-danger"
-                data-id="{{item._id}}" data-name="{{item.remark || item.username}}"
-                bindtap="onDeleteTap">删除账号</button>
-      </view>
     </view>
 
     <view class="empty" wx:if="{{!loading && accounts.length === 0}}">
@@ -130,21 +118,44 @@
     </view>
   </view>
 
-  <!-- 执行日志 -->
-  <view class="logs-section" wx:if="{{showLogs}}">
-    <view class="logs-title">最近执行日志</view>
-    <view class="logs-loading" wx:if="{{logsLoading}}">加载中...</view>
-    <view class="log-item {{item.success ? 'log-ok' : 'log-fail'}}" wx:for="{{logs}}" wx:key="_id">
-      <view class="log-line1">
-        <text class="log-time">{{item.timeText}}</text>
-        <text class="log-tag">{{item.triggerText}}</text>
-        <text class="log-action">{{item.actionText}}</text>
-        <text class="log-result {{item.success ? 'ok' : 'fail'}}">{{item.success ? '成功' : '失败'}}</text>
-      </view>
-      <view class="log-line2">{{item.remark || item.username}}{{item.targetText}} — {{item.message}}</view>
+  <!-- 执行日志：每个账号一张卡片 -->
+  <block wx:if="{{activeTab === 'logs'}}">
+    <view class="logs-loading" wx:if="{{panelLoading}}">加载中...</view>
+    <view class="error-item" wx:if="{{panelError}}">
+      面板加载失败：{{panelError}}。若提示「不支持的操作」，请重新上传 ppgardenTimer 云函数后重试。
     </view>
-    <view class="empty" wx:if="{{!logsLoading && logs.length === 0}}">暂无日志</view>
-  </view>
+    <block wx:if="{{!panelLoading && !panelError}}">
+      <view class="host-card panel-card" wx:for="{{panelAccounts}}" wx:for-item="acc" wx:for-index="ai" wx:key="accountId">
+        <view class="panel-head">
+          <text class="panel-name">{{acc.accountName}}</text>
+          <text class="panel-badge {{acc.activeCount ? 'on' : 'off'}}">{{acc.activeCount ? '托管中 ' + acc.activeCount : '空闲'}}</text>
+        </view>
+        <scroll-view scroll-y class="panel-logs" enhanced show-scrollbar="{{false}}"
+                     bindscrolltolower="onLoadMoreLogs" data-ai="{{ai}}">
+          <view class="log-item" wx:for="{{acc.logs}}" wx:for-item="lg" wx:key="id">
+            <view class="log-line1">
+              <text class="log-time">{{lg.timeText}}</text>
+              <text class="log-tag">{{lg.triggerText}}</text>
+              <text class="log-action">{{lg.actionText}}</text>
+              <text class="log-result {{lg.success ? 'ok' : 'fail'}}">{{lg.success ? '成功' : '失败'}}</text>
+            </view>
+            <view class="log-line2">{{lg.message}}</view>
+          </view>
+          <view class="status-empty" wx:if="{{!acc.logs.length}}">暂无执行日志</view>
+          <view class="panel-more" wx:if="{{acc.logsLoading}}">加载中...</view>
+          <view class="panel-more" wx:elif="{{acc.logsComplete}}">没有更多了</view>
+          <view class="panel-more" wx:else>上拉加载更多</view>
+        </scroll-view>
+      </view>
+      <view class="empty" wx:if="{{!panelAccounts.length}}">
+        <view class="empty-icon">💤</view>
+        <view>暂无启用中的账号</view>
+      </view>
+      <view class="error-item" wx:for="{{panelErrors}}" wx:key="accountId">
+        {{item.accountName}} — {{item.message}}
+      </view>
+    </block>
+  </block>
 
   <!-- 添加/编辑账号表单弹层 -->
   <view class="form-mask" wx:if="{{formVisible}}" bindtap="onCancelForm">
@@ -174,6 +185,31 @@
       <view class="form-actions">
         <button class="form-btn cancel" bindtap="onCancelForm">取消</button>
         <button class="form-btn save" loading="{{saving}}" bindtap="onSaveAccount">保存</button>
+      </view>
+    </view>
+  </view>
+
+  <!-- 花园动态日志弹层（底部弹窗） -->
+  <view class="form-mask" wx:if="{{logSheet.visible}}" bindtap="onCloseGardenLogs">
+    <view class="form-panel" catchtap="noop">
+      <view class="form-title">「{{logSheet.gardenName}}」动态日志</view>
+      <view class="sheet-auto {{logSheet.refreshing ? 'refreshing' : ''}}" wx:if="{{logSheet.auto && !logSheet.loading}}">
+        {{logSheet.refreshing ? '刷新中...' : '正在托管中 · 每 2 秒自动刷新'}}
+      </view>
+      <scroll-view scroll-y class="log-scroll" enhanced show-scrollbar="{{false}}">
+        <view class="logs-loading" wx:if="{{logSheet.loading}}">加载中...</view>
+        <block wx:if="{{!logSheet.loading}}">
+          <view class="log-item" wx:for="{{logSheet.items}}" wx:key="id">
+            <view class="log-line1">
+              <text class="log-time">{{item.timeText}}</text>
+            </view>
+            <view class="log-line2">{{item.text}}</view>
+          </view>
+          <view class="status-empty" wx:if="{{!logSheet.items.length}}">暂无动态</view>
+        </block>
+      </scroll-view>
+      <view class="form-actions">
+        <button class="form-btn cancel" bindtap="onCloseGardenLogs">关闭</button>
       </view>
     </view>
   </view>

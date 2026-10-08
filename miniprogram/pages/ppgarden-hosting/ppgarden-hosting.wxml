@@ -46,5 +46,20 @@
     </view>
   </block>
 
+  <!-- 网站最新动态 -->
+  <view class="section-title">网站最新动态</view>
+  <view class="activity-card" wx:if="{{activity.length}}">
+    <view class="activity-item" wx:for="{{activity}}" wx:key="idx">
+      <view class="activity-meta">
+        <text class="activity-account">{{item.accountName}}</text>
+        <text class="activity-time" wx:if="{{item.timeText}}">{{item.timeText}}</text>
+      </view>
+      <view class="activity-text">
+        <text wx:if="{{item.gardenName}}" class="activity-garden">「{{item.gardenName}}」</text>{{item.text}}
+      </view>
+    </view>
+  </view>
+  <view class="activity-empty" wx:if="{{!loading && !activity.length}}">暂无动态</view>
+
   <view class="updated" wx:if="{{updatedAtText}}">{{updatedAtText}} 更新</view>
 </view>

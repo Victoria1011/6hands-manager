@@ -7,7 +7,7 @@
     </view>
   </view>
 
-  <!-- 正在托管 -->
+  <!-- 正在托管（账号下方直接展示该花园的动态日志，无需点击） -->
   <view class="section-title" wx:if="{{hosting.length}}">正在托管 ({{hosting.length}})</view>
   <view class="host-card" wx:for="{{hosting}}" wx:for-index="i" wx:key="gardenId">
     <view class="host-line1">
@@ -15,6 +15,22 @@
       <text class="host-state active">{{item.stateText}}</text>
     </view>
     <view class="host-line2">账号：{{item.accountName}}</view>
+
+    <!-- 该花园的动态日志（固定高度，超出可滚动） -->
+    <view class="inline-logs">
+      <view class="logs-loading" wx:if="{{item.logsLoading && !item.logs}}">动态加载中...</view>
+      <view class="logs-error" wx:elif="{{item.logsError}}">{{item.logsError}}</view>
+      <scroll-view wx:else scroll-y class="inline-logs-scroll" enhanced show-scrollbar="{{false}}">
+        <view class="log-item" wx:for="{{item.logs}}" wx:for-item="lg" wx:key="id">
+          <view class="log-line1">
+            <text class="log-time">{{lg.timeText}}</text>
+          </view>
+          <view class="log-line2">{{lg.text}}</view>
+        </view>
+        <view class="logs-empty" wx:if="{{!item.logs || !item.logs.length}}">暂无动态</view>
+      </scroll-view>
+    </view>
+
     <view class="host-actions">
       <button size="mini" class="act-btn act-pause"
               data-account-id="{{item.accountId}}" data-garden-id="{{item.gardenId}}" data-i="{{i}}"
@@ -45,21 +61,6 @@
       {{item.accountName}} — {{item.message}}
     </view>
   </block>
-
-  <!-- 网站最新动态 -->
-  <view class="section-title">网站最新动态</view>
-  <view class="activity-card" wx:if="{{activity.length}}">
-    <view class="activity-item" wx:for="{{activity}}" wx:key="idx">
-      <view class="activity-meta">
-        <text class="activity-account">{{item.accountName}}</text>
-        <text class="activity-time" wx:if="{{item.timeText}}">{{item.timeText}}</text>
-      </view>
-      <view class="activity-text">
-        <text wx:if="{{item.gardenName}}" class="activity-garden">「{{item.gardenName}}」</text>{{item.text}}
-      </view>
-    </view>
-  </view>
-  <view class="activity-empty" wx:if="{{!loading && !activity.length}}">暂无动态</view>
 
   <view class="updated" wx:if="{{updatedAtText}}">{{updatedAtText}} 更新</view>
 </view>

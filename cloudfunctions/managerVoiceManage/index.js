@@ -210,12 +210,11 @@ async function fetchVoicesByModel(accountType, model, action) {
 }
 
 /**
- * 归一化不同模型的音色字段：
- * - Qwen 系列（qwen-voice-design / qwen-voice-enrollment）返回 voice 字段；
- * - CosyVoice（voice-enrollment）返回 voice_id 字段，且列表接口不返回 target_model，
- *   需从音色名 {target_model}-vd-{prefix}-{唯一标识} 中解析（见声音设计 API 文档）。
+ * 归一化 CosyVoice（voice-enrollment）音色字段：
+ * 返回 voice_id 字段，且列表接口不返回 target_model，
+ * 需从音色名 {target_model}-vd-{prefix}-{唯一标识} 中解析（见声音设计 API 文档）。
  * @param {Object} raw - API 原始音色项
- * @param {String} provider - 来源：qwen 或 cosy
+ * @param {String} provider - 来源：恒为 cosy
  */
 function normalizeVoiceItem(raw, provider) {
   if (!raw) return null
@@ -241,40 +240,29 @@ function normalizeVoiceItem(raw, provider) {
   }
 }
 
+// 音色类型前缀：设计的 voice_id 以 cosyvoice-v3.5-flash-vd- 开头，
+// 克隆的以 cosyvoice-v3.5-flash- 开头（不带 -vd-）
+const DESIGN_VOICE_PREFIX = 'cosyvoice-v3.5-flash-vd-'
+
 /**
  * 查询单个账号的全部音色列表
- * - clone：Qwen 声音复刻（qwen-voice-enrollment，action=list）
- * - design：Qwen 声音设计（qwen-voice-design，action=list）+ Cosy 声音设计
- *   （voice-enrollment，action=list_voice），两个模型并发拉取后合并
+ * 声音克隆与声音设计统一使用 CosyVoice（voice-enrollment，action=list_voice），
+ * 一次性返回全部音色，并通过 voice_kind 字段标记类型（clone / design）
  *
  * @param {String} accountType - 账号类型：main, v, w
- * @param {String} voiceType - 音色类型：clone(声音克隆) 或 design(声音设计)
  * @returns {Promise<{list: Array, complete: boolean}>} 归一化后的音色列表与是否完整
  */
-async function listVoicesForAccount(accountType, voiceType = 'clone') {
-  console.log('[VoiceManage] 查询全部音色列表，account:', accountType, 'voice_type:', voiceType)
+async function listVoicesForAccount(accountType) {
+  console.log('[VoiceManage] 查询全部音色列表，account:', accountType)
 
-  if (voiceType === 'design') {
-    const [qwenRes, cosyRes] = await Promise.all([
-      fetchVoicesByModel(accountType, 'qwen-voice-design', 'list'),
-      fetchVoicesByModel(accountType, 'voice-enrollment', 'list_voice')
-    ])
-    const qwenList = qwenRes.list.map(v => normalizeVoiceItem(v, 'qwen')).filter(Boolean)
-    const cosyList = cosyRes.list.map(v => normalizeVoiceItem(v, 'cosy')).filter(Boolean)
-    console.log('[VoiceManage] 账号', accountType, '设计音色合并：Qwen', qwenList.length, '个 + Cosy', cosyList.length, '个')
-    return {
-      list: qwenList.concat(cosyList),
-      complete: qwenRes.complete && cosyRes.complete,
-      providerErrors: {
-        qwen: qwenRes.error || null,
-        cosy: cosyRes.error || null
-      }
-    }
-  }
-
-  const res = await fetchVoicesByModel(accountType, 'qwen-voice-enrollment', 'list')
-  const list = res.list.map(v => normalizeVoiceItem(v, 'qwen')).filter(Boolean)
-  return { list, complete: res.complete, providerErrors: { qwen: res.error || null } }
+  const res = await fetchVoicesByModel(accountType, 'voice-enrollment', 'list_voice')
+  const list = res.list.map(v => normalizeVoiceItem(v, 'cosy')).filter(Boolean).map(v => ({
+    ...v,
+    voice_kind: v.voice.startsWith(DESIGN_VOICE_PREFIX) ? 'design' : 'clone'
+  }))
+  const designCount = list.filter(v => v.voice_kind === 'design').length
+  console.log('[VoiceManage] 账号', accountType, '音色（Cosy）:', list.length, '个，其中设计', designCount, '个')
+  return { list, complete: res.complete, providerErrors: { cosy: res.error || null } }
 }
 
 /**
@@ -339,7 +327,7 @@ async function listVoices(voiceType = 'clone', opts = {}) {
 
     // 并发查询目标账号的全部音色列表（每个账号内部自动循环分页）
     const accountResults = await Promise.all(
-      fetchAccounts.map(acc => listVoicesForAccount(acc, voiceType))
+      fetchAccounts.map(acc => listVoicesForAccount(acc))
     )
     const accountMap = {}
     fetchAccounts.forEach((acc, i) => { accountMap[acc] = accountResults[i] })
@@ -430,9 +418,17 @@ async function listVoices(voiceType = 'clone', opts = {}) {
     // 用 Set 做 O(1) 查找
     const allVoiceIdSet = new Set(allVoiceList.map(v => v.voice))
 
+    // voice_id -> 'system' | 'test'：标记音色所处的音色库集合（speakers / speakers_test）
+    const speakersInMap = {}
+
     // 先把系统/预置音色（speakers_test.system_speakers、speakers_test.upload_speakers
     // 和 speakers.system_speakers，两个集合数据结构一致）标记出来
     // 这些音色没有用户归属，不应进入“建议清理”
+    //
+    // 同时记录 voice -> 所在集合位置（speakersInMap），用于给前端音色打「音色库」标识：
+    //   - speakers_test.system_speakers / speakers.system_speakers → 'system'（正式音色库）
+    //   - speakers_test.upload_speakers                            → 'test'（测试音色库）
+    // 该标识独立于 user_info：已保存音色同样需要展示是否已入库。
     try {
       const [systemDoc, uploadDoc, mainSystemDoc] = await Promise.all([
         db.collection('speakers_test').doc('system_speakers').get().catch(() => null),
@@ -440,7 +436,7 @@ async function listVoices(voiceType = 'clone', opts = {}) {
         db.collection('speakers').doc('system_speakers').get().catch(() => null)
       ])
 
-      const markSystem = (doc, source) => {
+      const markSystem = (doc, source, inSpeakers) => {
         if (!doc || !doc.data || !Array.isArray(doc.data.list)) return 0
         let count = 0
         doc.data.list.forEach(s => {
@@ -448,8 +444,12 @@ async function listVoices(voiceType = 'clone', opts = {}) {
           if (!vid) return
           // 仅当该 voice 当前确实在 API 列表中且未被 user_saved_voices 记录为 saved 时，标记为 system
           if (!allVoiceIdSet.has(vid)) return
+          // 记录音色库归属（正式库优先，不被测试库覆盖）
+          if (!speakersInMap[vid] || inSpeakers === 'system') {
+            speakersInMap[vid] = inSpeakers
+          }
           const existing = voiceUserMap[vid]
-          if (existing && existing.type === 'saved') return // 用户已保存优先级最高
+          if (existing && existing.type === 'saved') { count++; return } // 用户已保存优先级最高，但仍在音色库中
           voiceUserMap[vid] = {
             openid: '',
             voice_name: s.voice_name || s.name || '',
@@ -460,10 +460,10 @@ async function listVoices(voiceType = 'clone', opts = {}) {
         })
         return count
       }
-      const sysCount = markSystem(systemDoc, 'system_speakers')
-      const upCount = markSystem(uploadDoc, 'upload_speakers')
-      const mainSysCount = markSystem(mainSystemDoc, 'speakers_system_speakers')
-      console.log('[VoiceManage] 系统音色匹配:', sysCount, '/上传预置音色匹配:', upCount, '/speakers 系统音色匹配:', mainSysCount)
+      const sysCount = markSystem(systemDoc, 'system_speakers', 'system')
+      const upCount = markSystem(uploadDoc, 'upload_speakers', 'test')
+      const mainSysCount = markSystem(mainSystemDoc, 'speakers_system_speakers', 'system')
+      console.log('[VoiceManage] 系统音色匹配:', sysCount, '/上传预置音色匹配:', upCount, '/speakers 系统音色匹配:', mainSysCount, '/音色库命中:', Object.keys(speakersInMap).length)
     } catch (e) {
       console.error('[VoiceManage] 查询 speakers/speakers_test 失败（已忽略，不影响主流程）:', e)
     }
@@ -570,9 +570,10 @@ async function listVoices(voiceType = 'clone', opts = {}) {
     //
     // creation_log 字段（含 voice_prompt / preview_text 等大字段）仅用于
     // 「声音设计」类型下「建议清理」列表的「播放预览/上传到测试音色库」功能
-    // （见 voice-manage.wxml 中的条件：currentType === 'design' && item.creation_log）。
+    // creation_log 字段（含 voice_prompt / preview_text 等大字段）仅用于
+    // 「声音设计」类型（voice_kind=design）「建议清理」列表的
+    // 「播放预览/上传到测试音色库」功能（见 voice-manage.wxml）。
     // 声音克隆类型完全不需要该字段，进一步减小响应体积。
-    const includeCreationLog = voiceType === 'design'
     const buildEnhancedVoice = (voice) => {
       const voiceId = voice.voice
       // 用户信息：仅保留前端实际用到的字段（openid/voice_name/type/source）
@@ -586,7 +587,7 @@ async function listVoices(voiceType = 'clone', opts = {}) {
 
       // 创建日志字段（去掉内部排序 _ts，仅 design 类型附带）
       let creationLog = null
-      if (includeCreationLog) {
+      if (voice.voice_kind === 'design') {
         const cl = voiceCreationLogMap[voiceId]
         if (cl) {
           creationLog = {
@@ -608,8 +609,11 @@ async function listVoices(voiceType = 'clone', opts = {}) {
         gmt_create: voice.gmt_create || null,
         target_model: voice.target_model || '',
         account_type: voice.account_type,
-        voice_type: voiceType,
-        provider: voice.provider || 'qwen', // 设计来源：qwen / cosy
+        voice_kind: voice.voice_kind || 'clone', // 音色类型：clone(克隆) / design(设计)，按 voice_id 前缀区分
+        provider: voice.provider || 'cosy',
+        // 是否已进入音色库：'system'=正式音色库(speakers/speakers_test.system_speakers)，
+        // 'test'=测试音色库(speakers_test.upload_speakers)，null=未入库
+        in_speakers: speakersInMap[voiceId] || null,
         user_info: userInfo,
         last_used_time: voiceLastUsedTimeMap[voiceId] || null,
         creation_log: creationLog
@@ -633,32 +637,24 @@ async function listVoices(voiceType = 'clone', opts = {}) {
       w: wList.length
     }
 
-    // 获取声音克隆音色列表时，顺便更新 api_key_usage.clone_usage：
+    // 顺便更新 api_key_usage.clone_usage：
     // key_num / key_v_num / key_w_num 分别对应 main / v / w 账号的克隆音色数量
     // 仅在三个账号全部拉取（fetchAccounts 为全量）且数据完整时更新，
     // 避免按账号的分页请求（此时其余账号为占位空列表）或拉取失败时写入错误数量
-    if (voiceType === 'clone' && fetchAccounts.length === ACCOUNT_KEYS.length && !incomplete) {
+    if (fetchAccounts.length === ACCOUNT_KEYS.length && !incomplete) {
+      const cloneStats = {
+        main: mainList.filter(v => v.voice_kind === 'clone').length,
+        v: vList.filter(v => v.voice_kind === 'clone').length,
+        w: wList.filter(v => v.voice_kind === 'clone').length
+      }
       try {
-        await updateCloneUsage(accountStats)
+        await updateCloneUsage(cloneStats)
       } catch (usageErr) {
         console.error('[VoiceManage] 更新 api_key_usage.clone_usage 失败（不影响主流程）:', usageErr)
       }
     }
 
-    // 按设计来源（Qwen/Cosy）统计各账号音色数量（design 类型前端用于子分类筛选）
-    const countProvider = (list, p) => list.filter(v => (v.provider || 'qwen') === p).length
-    const providerStats = {
-      qwen: {
-        main: countProvider(mainList, 'qwen'),
-        v: countProvider(vList, 'qwen'),
-        w: countProvider(wList, 'qwen')
-      },
-      cosy: {
-        main: countProvider(mainList, 'cosy'),
-        v: countProvider(vList, 'cosy'),
-        w: countProvider(wList, 'cosy')
-      }
-    }
+    // 音色统一来自 CosyVoice（provider 恒为 cosy），Qwen 已下架，不再按来源统计
 
     // 云端计算建议清理列表（逻辑与前端 _computeSuggestDelete 一致）：
     // 未保存（非 saved/system） 且 最近 120 天未使用（参考时间：last_used_time 优先，回退 gmt_create）
@@ -680,6 +676,9 @@ async function listVoices(voiceType = 'clone', opts = {}) {
       if (ui && ui.type === 'saved') continue
       // 系统/预置音色：永远不应建议清理
       if (ui && ui.type === 'system') continue
+      // 已进入音色库（正式/测试）：不可删除，不应建议清理
+      // （正常情况下已在上面被 type=system 覆盖，此处对已保存音色等边界情况兜底）
+      if (voice.in_speakers) continue
 
       const lastUsedTime = parseTime(voice.last_used_time)
       const createTime = parseTime(voice.gmt_create)
@@ -697,9 +696,10 @@ async function listVoices(voiceType = 'clone', opts = {}) {
     }
 
     // 建议清理列表体积保护：design 类型每个 creation_log 含 voice_prompt/preview_text 等大字段，
-    // 当列表较大时整体返回仍可能超 1MB。这里限制 design 类型建议清理列表上限，
+    // 当列表较大时整体返回仍可能超 1MB。这里限制建议清理列表上限，
     // 超出部分前端可后续按账号拉取（include_suggest=false 时不返回，避免重复）。
-    const SUGGEST_LIST_LIMIT = voiceType === 'design' ? 300 : 1000
+    const hasDesignVoices = enhancedVoiceList.some(v => v.voice_kind === 'design')
+    const SUGGEST_LIST_LIMIT = hasDesignVoices ? 300 : 1000
     let suggestListReturned = suggestDeleteList
     let suggestListTruncated = false
     if (suggestDeleteList.length > SUGGEST_LIST_LIMIT) {
@@ -731,10 +731,9 @@ async function listVoices(voiceType = 'clone', opts = {}) {
       code: 0,
       message: 'success',
       data: {
-        voice_list: pageList, // 当前页音色（分页）
-        voice_type: voiceType,
+        voice_list: pageList, // 当前页音色（分页，混合 clone/design）
+        voice_kind: 'all', // 单次返回混合类型，由 voice_kind 字段区分
         account_stats: accountStats,
-        provider_stats: providerStats, // 各账号 Qwen/Cosy 音色数量（design 类型使用）
         // 分页元信息
         page_index: pageIndex,
         page_size: pageSize,
@@ -846,44 +845,40 @@ async function deleteVoice(voice, creatorOpenid, voiceType = 'clone', accountTyp
     console.error('[VoiceManage] 清理 user_saved_voices 失败:', savedErr)
   }
 
-  // 3. 检查 speakers 集合中是否存在该音色
+  // 3. 检查音色是否已进入音色库（在任一 speakers / speakers_test 文档中即禁止删除）
+  //    与 listVoices 中的 in_speakers 标识保持一致的判定范围：
+  //      - speakers.system_speakers          → 正式音色库
+  //      - speakers_test.system_speakers     → 正式音色库
+  //      - speakers_test.upload_speakers     → 测试音色库
+  //    前端会依据 in_speakers 隐藏删除按钮，此处再兜底拦截，避免直接调用云函数绕过前端。
   try {
-    const speakerResult = await db.collection('speakers')
-      .doc('system_speakers')
-      .get()
-    if (speakerResult.data && speakerResult.data.list) {
-      const isInSpeakers = speakerResult.data.list.some(s => s.voice_id === voice)
-      if (isInSpeakers) {
-        console.log('[VoiceManage] 音色在 speakers 中，不允许删除:', voice)
-        return {
-          code: 403,
-          message: '该音色为系统内置音色，不支持删除',
-          data: null
-        }
+    const speakerDocs = await Promise.all([
+      db.collection('speakers').doc('system_speakers').get().catch(() => null),
+      db.collection('speakers_test').doc('system_speakers').get().catch(() => null),
+      db.collection('speakers_test').doc('upload_speakers').get().catch(() => null)
+    ])
+    const hitsIn = speakerDocs.some(doc => {
+      const list = (doc && doc.data && doc.data.list) || []
+      return list.some(s => (s.voice_id || s.voice) === voice)
+    })
+    if (hitsIn) {
+      console.log('[VoiceManage] 音色已在音色库中，不允许删除:', voice)
+      return {
+        code: 403,
+        message: '该音色已进入音色库，不支持删除',
+        data: null
       }
     }
   } catch (speakerErr) {
-    console.error('[VoiceManage] 查询 speakers 失败:', speakerErr)
+    console.error('[VoiceManage] 查询 speakers/speakers_test 失败:', speakerErr)
   }
 
   // 4. 调用阿里云 API 删除音色
-  // Qwen 声音设计：model=qwen-voice-design, action=delete, 参数 voice
-  // Cosy 声音设计：model=voice-enrollment, action=delete_voice, 参数 voice_id
-  // 声音克隆：model=qwen-voice-enrollment, action=delete, 参数 voice
-  let model, action, voiceParamKey
-  if (voiceType === 'design' && provider === 'cosy') {
-    model = 'voice-enrollment'
-    action = 'delete_voice'
-    voiceParamKey = 'voice_id'
-  } else if (voiceType === 'design') {
-    model = 'qwen-voice-design'
-    action = 'delete'
-    voiceParamKey = 'voice'
-  } else {
-    model = 'qwen-voice-enrollment'
-    action = 'delete'
-    voiceParamKey = 'voice'
-  }
+  // Qwen 系列模型已下架，声音克隆与声音设计统一使用 CosyVoice 删除接口：
+  // model=voice-enrollment, action=delete_voice, 参数 voice_id
+  const model = 'voice-enrollment'
+  const action = 'delete_voice'
+  const voiceParamKey = 'voice_id'
 
   const payload = {
     model: model,

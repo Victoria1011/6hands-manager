@@ -14,11 +14,15 @@ Page({
     displayCount: 0, // 当前筛选条件下应展示的音色总数（稳定值，不受分批渲染影响）
     totalCount: 0, // 当前类型下所有账号的音色总数（"全部" 账号标签使用）
     savedVoiceCount: 0,
-    currentType: '', // 当前音色类型：clone(声音克隆) 或 design(声音设计)，空表示未选择
-    designProvider: 'all', // 声音设计来源筛选：all(全部), qwen(Qwen设计), cosy(Cosy设计)
-    providerCounts: { qwen: 0, cosy: 0 }, // 当前条件下 Qwen/Cosy 音色数量（来源筛选标签展示）
+    currentType: 'all', // 当前音色分类筛选：all(全部) / clone(克隆) / design(设计)，本地过滤
+    kindCounts: { clone: 0, design: 0 }, // 当前账号/列表标签下 克隆/设计 音色数量（分类标签展示）
+    // 说明：Qwen 系列模型已下架，声音克隆/声音设计统一使用 CosyVoice，
+    // 一次加载全部音色，类型由云端 voice_kind 字段标记（按 voice_id 前缀区分）
     currentAccount: 'all', // 当前账号：all(全部), main(主账号), v(V账号), w(W账号)
     currentListTab: 'all', // 当前列表标签：all(全部) 或 suggest(建议清理)
+    searchKeyword: '', // 音色 ID 搜索关键词（本地实时过滤）
+    searching: false, // 是否处于搜索状态（搜索时忽略分类/账号/列表标签筛选）
+    searchScannedLoaded: false, // 是否已在云端扫描过全部账号（搜索无结果提示用）
     accountStats: { main: 0, v: 0, w: 0 }, // 各账号音色数量统计
     accountNames: { main: '主账号', v: 'V账号', w: 'W账号' }, // 账号名称映射
     batchMode: false, // 批量操作模式
@@ -45,7 +49,10 @@ Page({
 
   onLoad() {
     console.log('[VoiceManage] 页面加载完成')
-    this.checkIsLoggedIn()
+    if (this.checkIsLoggedIn()) {
+      // 直接加载全部音色（CosyVoice 统一接口），不再区分克隆/设计入口
+      this.loadVoiceList()
+    }
   },
 
   onShow() {
@@ -188,6 +195,131 @@ Page({
     })
   },
 
+  // ===== 音色 ID 搜索 =====
+
+  // 输入即时过滤：已加载数据中模糊匹配（不区分大小写）
+  onSearchInput(e) {
+    const keyword = (e.detail.value || '').trim()
+    const searching = !!keyword
+    if (keyword === this.data.searchKeyword) return
+
+    if (searching) {
+      // 搜索时退出批量模式，避免选择状态与结果列表错位
+      this.setData({
+        searchKeyword: keyword,
+        searching: true,
+        batchMode: false,
+        selectedVoices: {},
+        selectedCount: 0
+      })
+    } else {
+      this.setData({ searchKeyword: '', searching: false, searchScannedLoaded: false })
+    }
+    this.applyFilterAndRender()
+  },
+
+  // 点击搜索 / 键盘确认：先本地匹配，未命中则到云端扫描全部账号
+  async onSearchConfirm() {
+    const keyword = (this.data.searchKeyword || '').trim()
+    if (!keyword) {
+      wx.showToast({ title: '请输入音色 ID', icon: 'none' })
+      return
+    }
+    if (this.data.searchKeyword !== keyword) {
+      this.setData({ searchKeyword: keyword, searching: true })
+    }
+    this.applyFilterAndRender()
+
+    if ((this._filteredList || []).length === 0) {
+      await this._searchVoiceInCloud(keyword)
+    }
+  },
+
+  // 清空搜索，恢复原列表
+  onClearSearch() {
+    if (!this.data.searchKeyword && !this.data.searching) return
+    this.setData({ searchKeyword: '', searching: false, searchScannedLoaded: false })
+    this.applyFilterAndRender()
+  },
+
+  // 云端搜索：逐账号翻页查找，命中即展示，确保能搜到分页未加载到的音色
+  async _searchVoiceInCloud(keyword) {
+    if (this.data.loading) return
+    this.setData({ loading: true })
+
+    const token = app.getToken()
+    const kw = keyword.toLowerCase()
+    const ACCOUNTS = ['main', 'v', 'w']
+    const PAGE_SIZE = 100
+    const MAX_PAGES = 20 // 每个账号最多扫描 20 页，避免极端情况下耗时过长
+    const hit = { item: null, account: '' }
+
+    try {
+      for (const acc of ACCOUNTS) {
+        if (hit.item) break
+        let pageIndex = 0
+        let hasMore = true
+        let pages = 0
+
+        while (hasMore && pages < MAX_PAGES && !hit.item) {
+          const res = await this._callListFunction({
+            token,
+            page_index: pageIndex,
+            page_size: PAGE_SIZE,
+            account_type: acc,
+            include_suggest: false
+          }).catch(err => {
+            console.error(`[VoiceManage] 搜索 ${acc} 第 ${pageIndex + 1} 页失败:`, err)
+            return null
+          })
+
+          const result = res && res.result
+          if (!result || result.code !== 0) break
+
+          const data = result.data || {}
+          const list = (data.voice_list || []).map(v => ({
+            ...v,
+            last_used_time: v.last_used_time ? this.formatTime(v.last_used_time) : null
+          }))
+
+          const found = list.find(v => String(v.voice || '').toLowerCase().indexOf(kw) !== -1)
+          if (found) {
+            hit.item = found
+            hit.account = acc
+            break
+          }
+
+          hasMore = !!data.has_more
+          pageIndex++
+          pages++
+        }
+      }
+
+      // 搜索期间用户可能已修改关键词/清空搜索，避免覆盖当前结果
+      if (this.data.searchKeyword.trim().toLowerCase() !== kw) {
+        this.setData({ loading: false })
+        return
+      }
+
+      if (hit.item) {
+        // 命中：合并进对应账号缓存，后续渲染/删除逻辑可复用
+        const acc = hit.account
+        const exists = (this._accountLoaded[acc] || []).some(v => v.voice === hit.item.voice)
+        if (!exists) {
+          this._accountLoaded[acc] = (this._accountLoaded[acc] || []).concat([hit.item])
+        }
+      }
+
+      // 已扫描到全部账号，本地未命中即可判定「不存在」
+      this.setData({ loading: false, searchScannedLoaded: true })
+      this.applyFilterAndRender()
+    } catch (err) {
+      console.error('[VoiceManage] 云端搜索失败:', err)
+      this.setData({ loading: false })
+      wx.showToast({ title: '搜索失败，请稍后重试', icon: 'none' })
+    }
+  },
+
   // 切换账号
   switchAccount(e) {
     const account = e.currentTarget.dataset.account
@@ -218,27 +350,42 @@ Page({
   // 当前 tab=「全部」时：
   //   - currentAccount='all' → 合并三个账号已加载列表
   //   - currentAccount=具体账号 → 仅该账号已加载列表
-  // 声音设计类型下，再按 designProvider（all/qwen/cosy）二次过滤
+  // 再按 currentType（all/clone/design）本地过滤音色分类
   applyFilterAndRender() {
-    const { currentAccount, currentListTab } = this.data
+    const { currentAccount, currentListTab, currentType } = this.data
     const suggestDeleteList = this._cachedSuggestDeleteList || []
     const suggestDeleteStats = this._cachedSuggestDeleteStats || { main: 0, v: 0, w: 0 }
     const suggestDeleteCount = this._cachedSuggestDeleteCount || 0
     const accountStats = this._cachedAccountStats || { main: 0, v: 0, w: 0 }
-    const providerCounts = this._computeProviderCounts()
-    const isProviderFiltered = this.data.currentType === 'design' && this.data.designProvider !== 'all'
+    const kindCounts = this._computeKindCounts()
+    const isKindFiltered = currentType !== 'all'
+
+    // 搜索模式：忽略账号/分类/列表标签筛选，在全部已加载音色中按 voice ID 匹配
+    if (this.data.searching) {
+      const kw = (this.data.searchKeyword || '').trim().toLowerCase()
+      const base = kw
+        ? [].concat(this._accountLoaded.main || [], this._accountLoaded.v || [], this._accountLoaded.w || [])
+          .filter(v => String(v.voice || '').toLowerCase().indexOf(kw) !== -1)
+        : []
+      this.setData({
+        displayCount: base.length,
+        savedVoiceCount: base.filter(v => v.user_info && v.user_info.type === 'saved').length
+      })
+      this.renderFilteredList(base, { scrollToTop: false }) // 输入过程中不打断滚动
+      return
+    }
 
     if (currentListTab === 'suggest') {
-      let filteredList = currentAccount === 'all'
+      const baseList = currentAccount === 'all'
         ? suggestDeleteList
         : suggestDeleteList.filter(v => v.account_type === currentAccount)
-      filteredList = this._filterByProvider(filteredList)
+      const filteredList = this._filterByKind(baseList)
 
-      // 建议清理数量/统计：按 provider 过滤后重新计算（未过滤时用云端缓存值）
+      // 建议清理数量/统计：按分类过滤后重新计算（未过滤时用云端缓存值）
       let statsShown = suggestDeleteStats
       let countShown = suggestDeleteCount
-      if (isProviderFiltered) {
-        const filteredAll = this._filterByProvider(suggestDeleteList)
+      if (isKindFiltered) {
+        const filteredAll = this._filterByKind(suggestDeleteList)
         statsShown = { main: 0, v: 0, w: 0 }
         filteredAll.forEach(v => {
           if (statsShown[v.account_type] != null) statsShown[v.account_type]++
@@ -249,7 +396,7 @@ Page({
       this.setData({
         savedVoiceCount: 0, // 建议清理列表中不含已保存音色
         displayCount: filteredList.length,
-        providerCounts,
+        kindCounts,
         // suggestDeleteCount / suggestDeleteStats 在切账号时需展示对应账号的数量
         suggestDeleteCount: currentAccount === 'all'
           ? countShown
@@ -279,62 +426,38 @@ Page({
     // （savedVoiceCount 由 loadVoiceList 在首页时一次性写入；切账号/标签时不重算）
     // 这里不再覆盖，保留 loadVoiceList 中设置的值
 
-    const displayCount = isProviderFiltered
-      ? (providerCounts[this.data.designProvider] || 0)
+    const displayCount = isKindFiltered
+      ? (kindCounts[currentType] || 0)
       : this._computeDisplayCount(currentAccount, accountStats, suggestDeleteStats)
 
-    this.setData({
-      providerCounts,
-      displayCount
-    })
-    this.renderFilteredList(this._filterByProvider(filteredList))
+    this.setData({ displayCount, kindCounts })
+    this.renderFilteredList(this._filterByKind(filteredList))
   },
 
-  // 按声音设计来源过滤列表（仅 design 类型且选中 qwen/cosy 时生效）
-  _filterByProvider(list) {
-    if (this.data.currentType !== 'design') return list
-    const p = this.data.designProvider
-    if (!p || p === 'all') return list
-    return list.filter(v => (v.provider || 'qwen') === p)
+  // 按音色分类过滤列表（all 不过滤；clone/design 按 voice_kind 过滤）
+  _filterByKind(list) {
+    const k = this.data.currentType
+    if (!k || k === 'all') return list
+    return list.filter(v => (v.voice_kind || 'clone') === k)
   },
 
-  // 计算当前账号/标签下 Qwen/Cosy 音色数量（来源筛选标签展示，不受来源筛选本身影响）
-  // - 全部 tab：使用云端全量统计 provider_stats（分页拉取不影响总数）
-  // - 建议清理 tab：建议列表云端一次性返回，直接统计
-  _computeProviderCounts() {
-    if (this.data.currentType !== 'design') return { qwen: 0, cosy: 0 }
+  // 计算当前账号/列表标签下 克隆/设计 音色数量（分类标签展示，不受分类筛选本身影响）
+  // 注意：基于已加载数据统计，云端分页未拉完时数量可能偏少
+  _computeKindCounts() {
     const acc = this.data.currentAccount
-
+    let base
     if (this.data.currentListTab === 'suggest') {
-      const counts = { qwen: 0, cosy: 0 }
-      ;(this._cachedSuggestDeleteList || []).forEach(v => {
-        if (acc !== 'all' && v.account_type !== acc) return
-        const p = v.provider || 'qwen'
-        if (counts[p] != null) counts[p]++
-      })
-      return counts
+      base = this._cachedSuggestDeleteList || []
+    } else {
+      base = [].concat(this._accountLoaded.main || [], this._accountLoaded.v || [], this._accountLoaded.w || [])
     }
-
-    const ps = this._cachedProviderStats || { qwen: { main: 0, v: 0, w: 0 }, cosy: { main: 0, v: 0, w: 0 } }
-    const sumFor = (p) => acc === 'all'
-      ? ((ps[p].main || 0) + (ps[p].v || 0) + (ps[p].w || 0))
-      : (ps[p][acc] || 0)
-    return { qwen: sumFor('qwen'), cosy: sumFor('cosy') }
-  },
-
-  // 切换声音设计来源（全部 / Qwen / Cosy）
-  switchDesignProvider(e) {
-    const provider = e.currentTarget.dataset.provider
-    if (provider === this.data.designProvider) return
-
-    console.log('[VoiceManage] 切换设计来源:', provider)
-    this.setData({
-      designProvider: provider,
-      batchMode: false,
-      selectedVoices: {},
-      selectedCount: 0
+    const counts = { clone: 0, design: 0 }
+    base.forEach(v => {
+      if (acc !== 'all' && v.account_type !== acc) return
+      const k = v.voice_kind || 'clone'
+      if (counts[k] != null) counts[k]++
     })
-    this.applyFilterAndRender()
+    return counts
   },
 
   // 计算当前条件下应展示的音色总数（不受已加载页数影响，使用云端统计）
@@ -410,8 +533,7 @@ Page({
 
     try {
       const token = app.getToken()
-      const voiceType = this.data.currentType
-      console.log('[VoiceManage] 开始获取音色列表，类型:', voiceType)
+      console.log('[VoiceManage] 开始获取音色列表（全部，CosyVoice 统一接口）')
 
       // 重置分页游标（首次拉取）
       this._accountPageCursor = { main: 0, v: 0, w: 0 }
@@ -422,14 +544,13 @@ Page({
       // 拉取首页：按账号分别拉第一页（避免合并分页与后续按账号分页不一致），
       // 同时只在第一个账号的请求中带 include_suggest=true 以获取统计与建议清理。
       // design 类型每条记录附带 creation_log（含 voice_prompt/preview_text 等大字段），
-      // 用更小的页大小确保单次响应不超 1MB。
-      const FIRST_PAGE_SIZE = voiceType === 'design' ? 80 : 200
+      // 用较小的页大小确保单次响应不超 1MB。
+      const FIRST_PAGE_SIZE = 100
       const ACCOUNTS = ['main', 'v', 'w']
       const responses = await Promise.all(
         ACCOUNTS.map((acc, idx) => {
           return this._callListFunction({
             token,
-            voice_type: voiceType,
             page_index: 0,
             page_size: FIRST_PAGE_SIZE,
             account_type: acc,
@@ -450,7 +571,7 @@ Page({
       let savedVoiceCount = 0
       let incompleteAccounts = []
       let suggestTruncated = false
-      let providerErrors = {} // 分来源（Qwen/Cosy）拉取错误 { cosy: { main: '...' } }
+      let fetchErrors = {} // 各账号 Cosy 拉取错误 { main: '...' }
 
       ACCOUNTS.forEach((acc, idx) => {
         const res = responses[idx]
@@ -469,13 +590,13 @@ Page({
         }
         const data = result.data || {}
 
-        // 收集分来源拉取错误（如 Cosy 拉取失败，用于明确提示"列表为空"的原因）
+        // 收集各账号拉取错误（用于明确提示"列表为空"的原因）
         const pe = data.provider_errors || {}
         Object.keys(pe).forEach(p => {
-          if (pe[p] && pe[p][acc]) {
-            providerErrors[p] = providerErrors[p] || {}
-            providerErrors[p][acc] = pe[p][acc]
-          }
+          const accErrors = pe[p] || {}
+          Object.keys(accErrors).forEach(a => {
+            if (accErrors[a]) fetchErrors[a] = accErrors[a]
+          })
         })
 
         const list = (data.voice_list || []).map(v => ({
@@ -500,8 +621,6 @@ Page({
           savedVoiceCount = data.saved_voice_count || 0
           incompleteAccounts = data.incomplete_accounts || []
           suggestTruncated = !!data.suggest_delete_truncated
-          // 各账号 Qwen/Cosy 音色数量（design 类型来源筛选标签使用）
-          this._cachedProviderStats = data.provider_stats || { qwen: { main: 0, v: 0, w: 0 }, cosy: { main: 0, v: 0, w: 0 } }
         }
       })
 
@@ -552,17 +671,13 @@ Page({
           showCancel: false,
           confirmText: '知道了'
         })
-      } else if (Object.keys(providerErrors).length > 0) {
-        // 某个来源（Qwen/Cosy）拉取失败：明确提示，便于定位「来源列表为空」的原因
-        const parts = Object.keys(providerErrors).map(p => {
-          const label = p === 'cosy' ? 'Cosy' : 'Qwen'
-          const accMsgs = Object.keys(providerErrors[p])
-            .map(a => `${this.data.accountNames[a] || a}: ${providerErrors[p][a]}`)
-          return `${label}（${accMsgs.join('；')}）`
-        })
+      } else if (Object.keys(fetchErrors).length > 0) {
+        // 某些账号拉取失败：明确提示，便于定位「列表为空」的原因
+        const parts = Object.keys(fetchErrors)
+          .map(a => `${this.data.accountNames[a] || a}: ${fetchErrors[a]}`)
         wx.showModal({
-          title: '部分音色来源拉取失败',
-          content: `${parts.join('；')}。对应来源的音色列表可能为空或不完整，请点击「刷新」重试。`,
+          title: '部分音色拉取失败',
+          content: `${parts.join('；')}。对应账号的音色列表可能为空或不完整，请点击「刷新」重试。`,
           showCancel: false,
           confirmText: '知道了'
         })
@@ -603,7 +718,7 @@ Page({
 
   // 懒加载：完整过滤结果存在 this._filteredList（不进 data，避免大数组反复传给视图层），
   // data.voiceList 只保留已渲染的窗口。首屏只渲染第一页，其余下滑到底再追加。
-  renderFilteredList(filteredList) {
+  renderFilteredList(filteredList, options) {
     this._filteredList = filteredList || []
     const firstPage = this._filteredList.slice(0, PAGE_SIZE)
     const hasMoreLocal = this._filteredList.length > firstPage.length
@@ -613,11 +728,14 @@ Page({
       hasMore: hasMoreLocal || this._hasMoreRemote()
     })
     // 切换账号/标签后回到顶部，避免停留在上一个列表的滚动位置
-    wx.pageScrollTo({ scrollTop: 0, duration: 0 })
+    if (!options || options.scrollToTop !== false) {
+      wx.pageScrollTo({ scrollTop: 0, duration: 0 })
+    }
   },
 
   // 当前条件下云端是否还有未拉取的下一页
   _hasMoreRemote() {
+    if (this.data.searching) return false // 搜索模式下不自动翻页，由「搜索」按钮触发云端扫描
     if (this.data.currentListTab === 'suggest') return false // 建议清理一次性返回
     const acc = this.data.currentAccount
     if (acc === 'all') return !!this._hasMoreAll
@@ -658,9 +776,8 @@ Page({
 
     try {
       const acc = this.data.currentAccount
-      const voiceType = this.data.currentType
       const token = app.getToken()
-      const PAGE_SIZE = voiceType === 'design' ? 80 : 200
+      const PAGE_SIZE = 100
 
       if (acc === 'all') {
         // 「全部」账号：并发为所有还有更多的账号拉取下一页
@@ -675,7 +792,6 @@ Page({
             const pageIndex = this._accountPageCursor[a]
             return this._callListFunction({
               token,
-              voice_type: voiceType,
               page_index: pageIndex,
               page_size: PAGE_SIZE,
               account_type: a,
@@ -712,7 +828,6 @@ Page({
         const pageIndex = this._accountPageCursor[acc] || 0
         const res = await this._callListFunction({
           token,
-          voice_type: voiceType,
           page_index: pageIndex,
           page_size: PAGE_SIZE,
           account_type: acc,
@@ -747,37 +862,23 @@ Page({
     }
   },
 
-  // 切换音色类型
+  // 切换音色分类标签（全部 / 克隆 / 设计）：本地过滤，不重新拉取
   switchType(e) {
     const type = e.currentTarget.dataset.type
     if (type === this.data.currentType) return
 
-    this._filteredList = []
-    this._resetPagingState()
+    console.log('[VoiceManage] 切换音色分类:', type)
     this.setData({
       currentType: type,
-      designProvider: 'all',
-      providerCounts: { qwen: 0, cosy: 0 },
-      voiceList: [],
-      allVoiceList: [],
-      hasMore: false,
-      savedVoiceCount: 0,
-      displayCount: 0,
-      totalCount: 0,
-      suggestDeleteList: [],
-      suggestDeleteCount: 0,
-      currentListTab: 'all',
       batchMode: false,
       selectedVoices: {},
       selectedCount: 0
-    }, () => {
-      this.loadVoiceList()
     })
+    this.applyFilterAndRender()
   },
 
   // 刷新列表
   onRefresh() {
-    if (!this.data.currentType) return
     this._filteredList = []
     this._resetPagingState()
     this.setData({
@@ -791,7 +892,10 @@ Page({
       suggestDeleteCount: 0,
       batchMode: false,
       selectedVoices: {},
-      selectedCount: 0
+      selectedCount: 0,
+      searchKeyword: '',
+      searching: false,
+      searchScannedLoaded: false
     })
     this.loadVoiceList()
   },
@@ -807,7 +911,6 @@ Page({
     this._cachedSuggestDeleteList = []
     this._cachedSuggestDeleteCount = 0
     this._cachedSuggestDeleteStats = { main: 0, v: 0, w: 0 }
-    this._cachedProviderStats = { qwen: { main: 0, v: 0, w: 0 }, cosy: { main: 0, v: 0, w: 0 } }
   },
 
   // 删除成功后本地移除已删除项 + 同步统计，避免重新拉取列表（提升体验）
@@ -843,18 +946,6 @@ Page({
     })
     this._cachedSuggestDeleteStats = suggestDeleteStats
     this._cachedSuggestDeleteCount = this._cachedSuggestDeleteList.length
-
-    // 4.5 更新设计来源统计（design 类型 Qwen/Cosy 数量，供来源筛选标签展示）
-    const providerStats = this._cachedProviderStats
-    if (providerStats) {
-      ;(deletedItems || []).forEach(item => {
-        const p = (item && item.provider) || 'qwen'
-        const acc = (item && item.account_type) || 'main'
-        if (providerStats[p] && providerStats[p][acc] != null) {
-          providerStats[p][acc] = Math.max(0, providerStats[p][acc] - 1)
-        }
-      })
-    }
 
     // 5. 计算新的 totalCount 与 savedVoiceCount
     const totalCount = (accountStats.main || 0) + (accountStats.v || 0) + (accountStats.w || 0)
@@ -908,7 +999,7 @@ Page({
     const voice = e.currentTarget.dataset.voice
     const creatorOpenid = e.currentTarget.dataset.creatorOpenid || ''
     const accountType = e.currentTarget.dataset.accountType || 'main'
-    const provider = e.currentTarget.dataset.provider || 'qwen'
+    const provider = e.currentTarget.dataset.provider || 'cosy'
 
     wx.showModal({
       title: '确认删除',
@@ -924,7 +1015,7 @@ Page({
   },
 
   // 执行删除
-  async deleteVoice(voice, creatorOpenid, accountType = 'main', provider = 'qwen') {
+  async deleteVoice(voice, creatorOpenid, accountType = 'main', provider = 'cosy') {
     wx.showLoading({ title: '删除中...' })
 
     try {
@@ -936,11 +1027,10 @@ Page({
         data: {
           token: token,
           action: 'delete',
-          voice_type: this.data.currentType,
           voice: voice,
           creator_openid: creatorOpenid,
           account_type: accountType,
-          provider: provider // design 类型区分 Qwen/Cosy 删除接口
+          provider: provider // 音色统一为 CosyVoice 来源
         }
       })
 
@@ -959,6 +1049,15 @@ Page({
       wx.hideLoading()
       wx.showToast({ title: '删除失败，请稍后重试', icon: 'none' })
     }
+  },
+
+  // 音色是否可删除：已保存音色与已进入音色库（正式/测试）的音色均不可删除
+  // 与云函数 deleteVoice 的 403 拦截范围保持一致（speakers/speakers_test 三个文档）
+  _isDeletable(v) {
+    if (!v) return false
+    if (v.in_speakers) return false
+    if (v.user_info && v.user_info.type === 'saved') return false
+    return true
   },
 
   // 切换批量模式
@@ -986,7 +1085,7 @@ Page({
   // 全选/取消全选（针对当前筛选下的全部可删除音色，而非仅已渲染窗口）
   toggleSelectAll() {
     const list = this._filteredList || this.data.voiceList
-    const selectable = list.filter(v => !v.user_info || v.user_info.type !== 'saved')
+    const selectable = list.filter(v => this._isDeletable(v))
     const shouldSelectAll = this.data.selectedCount < selectable.length
 
     const selectedVoices = {}
@@ -1001,7 +1100,7 @@ Page({
   // 快速追加选择 10 个（跳过已选中的，可连点累加：10、20、30...）
   selectTen() {
     const list = this._filteredList || this.data.voiceList
-    const selectable = list.filter(v => !v.user_info || v.user_info.type !== 'saved')
+    const selectable = list.filter(v => this._isDeletable(v))
     const unselected = selectable.filter(v => !this.data.selectedVoices[v.voice])
 
     if (unselected.length === 0) {
@@ -1046,12 +1145,12 @@ Page({
     const sourceList = this._filteredList || this.data.voiceList
 
     const items = sourceList
-      .filter(voice => selectedVoices[voice.voice] && (!voice.user_info || voice.user_info.type !== 'saved'))
+      .filter(voice => selectedVoices[voice.voice] && this._isDeletable(voice))
       .map(voice => ({
         voice: voice.voice,
         creatorOpenid: voice.user_info ? voice.user_info.openid : '',
         accountType: voice.account_type || 'main',
-        provider: voice.provider || 'qwen',
+        provider: voice.provider || 'cosy',
         _raw: voice
       }))
 
@@ -1096,15 +1195,17 @@ Page({
   async executeSuggestBatchDelete() {
     const allSuggestList = this.data.suggestDeleteList
     const acc = this.data.currentAccount
-    const suggestList = acc === 'all'
+    // 已进入音色库的音色不可删除，从清理范围中剔除（与云函数 403 拦截保持一致）
+    const suggestList = (acc === 'all'
       ? allSuggestList
       : allSuggestList.filter(v => v.account_type === acc)
+    ).filter(v => this._isDeletable(v))
 
     const items = suggestList.map(item => ({
       voice: item.voice,
       creatorOpenid: item.user_info ? item.user_info.openid : '',
       accountType: item.account_type || 'main',
-      provider: item.provider || 'qwen',
+      provider: item.provider || 'cosy',
       _raw: item
     }))
 
@@ -1171,11 +1272,10 @@ Page({
           data: {
             token: token,
             action: 'delete',
-            voice_type: this.data.currentType,
             voice: item.voice,
             creator_openid: item.creatorOpenid,
             account_type: item.accountType,
-            provider: item.provider || 'qwen' // design 类型区分 Qwen/Cosy 删除接口
+            provider: item.provider || 'cosy' // 音色统一为 CosyVoice 来源
           }
         })
 

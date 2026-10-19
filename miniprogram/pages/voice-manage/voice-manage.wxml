@@ -5,18 +5,25 @@
     <view class="header-actions">
       <view class="voice-type-tabs">
         <view
+          class="type-tab {{currentType === 'all' ? 'type-tab-active' : ''}}"
+          bindtap="switchType"
+          data-type="all"
+        >
+          全部 ({{kindCounts.clone + kindCounts.design}})
+        </view>
+        <view
           class="type-tab {{currentType === 'clone' ? 'type-tab-active' : ''}}"
           bindtap="switchType"
           data-type="clone"
         >
-          声音克隆
+          克隆 ({{kindCounts.clone}})
         </view>
         <view
           class="type-tab {{currentType === 'design' ? 'type-tab-active' : ''}}"
           bindtap="switchType"
           data-type="design"
         >
-          声音设计
+          设计 ({{kindCounts.design}})
         </view>
       </view>
       <view class="header-buttons">
@@ -30,33 +37,25 @@
       </view>
     </view>
 
-    <!-- 声音设计来源：全部 / Qwen / Cosy -->
-    <view class="provider-tabs" wx:if="{{!loading && currentType === 'design'}}">
-      <view
-        class="provider-tab {{designProvider === 'all' ? 'provider-tab-active' : ''}}"
-        bindtap="switchDesignProvider"
-        data-provider="all"
-      >
-        全部 ({{providerCounts.qwen + providerCounts.cosy}})
-      </view>
-      <view
-        class="provider-tab {{designProvider === 'qwen' ? 'provider-tab-active' : ''}}"
-        bindtap="switchDesignProvider"
-        data-provider="qwen"
-      >
-        Qwen ({{providerCounts.qwen}})
-      </view>
-      <view
-        class="provider-tab {{designProvider === 'cosy' ? 'provider-tab-active' : ''}}"
-        bindtap="switchDesignProvider"
-        data-provider="cosy"
-      >
-        Cosy ({{providerCounts.cosy}})
-      </view>
+    <!-- 音色 ID 搜索 -->
+    <view class="search-bar">
+      <input
+        class="search-input"
+        type="text"
+        value="{{searchKeyword}}"
+        placeholder="输入音色 ID 搜索"
+        placeholder-class="search-placeholder"
+        confirm-type="search"
+        bindinput="onSearchInput"
+        bindconfirm="onSearchConfirm"
+      />
+      <view class="search-clear" wx:if="{{searchKeyword}}" bindtap="onClearSearch">✕</view>
+      <button class="search-btn" size="mini" bindtap="onSearchConfirm">搜索</button>
     </view>
 
     <!-- 列表标签：全部 / 建议清理 -->
-    <view class="list-tab-bar" wx:if="{{!loading && currentType}}">
+    <!-- 说明：Qwen 系列模型已下架，音色统一来自 CosyVoice，不再需要来源筛选 -->
+    <view class="list-tab-bar" wx:if="{{!loading}}">
       <view
         class="list-tab {{currentListTab === 'all' ? 'list-tab-active' : ''}}"
         bindtap="switchListTab"
@@ -83,7 +82,7 @@
     </view>
 
     <!-- 账号选项卡 -->
-    <view class="account-tabs" wx:if="{{!loading && currentType}}">
+    <view class="account-tabs" wx:if="{{!loading}}">
       <view
         class="account-tab {{currentAccount === 'all' ? 'account-tab-active' : ''}}"
         bindtap="switchAccount"
@@ -130,10 +129,10 @@
   </view>
 
   <!-- 统计信息 -->
-  <view class="stats-card" wx:if="{{currentType}}">
+  <view class="stats-card">
     <view class="stat-item">
       <text class="stat-value">{{displayCount}}</text>
-      <text class="stat-label">{{currentListTab === 'suggest' ? '建议清理' : (currentType === 'clone' ? '声音克隆' : '声音设计')}}总数</text>
+      <text class="stat-label">{{currentListTab === 'suggest' ? '建议清理' : (currentType === 'clone' ? '克隆音色' : (currentType === 'design' ? '设计音色' : '音色'))}}总数</text>
     </view>
     <view class="stat-divider"></view>
     <view class="stat-item">
@@ -149,11 +148,11 @@
 
   <!-- 音色列表 -->
   <view class="voice-list" wx:if="{{voiceList.length > 0}}">
-    <view class="voice-card {{item.user_info && item.user_info.type === 'saved' ? 'voice-card-saved' : ''}} {{batchMode ? 'voice-card-batch' : ''}}" wx:for="{{voiceList}}" wx:key="voice" data-voice="{{item.voice}}" bindtap="onSelectVoice" wx:if="{{!batchMode || (!item.user_info || item.user_info.type !== 'saved')}}">
+    <view class="voice-card {{item.user_info && item.user_info.type === 'saved' ? 'voice-card-saved' : ''}} {{batchMode ? 'voice-card-batch' : ''}}" wx:for="{{voiceList}}" wx:key="voice" data-voice="{{item.voice}}" bindtap="onSelectVoice" wx:if="{{!batchMode || (!item.in_speakers && (!item.user_info || item.user_info.type !== 'saved'))}}">
       <view class="voice-header">
         <view class="voice-info">
           <!-- 批量模式复选框 -->
-          <view class="voice-checkbox" wx:if="{{batchMode && (!item.user_info || item.user_info.type !== 'saved')}}">
+          <view class="voice-checkbox" wx:if="{{batchMode && !item.in_speakers && (!item.user_info || item.user_info.type !== 'saved')}}">
             <view class="checkbox {{selectedVoices[item.voice] ? 'checkbox-checked' : ''}}">
               <text class="check-icon" wx:if="{{selectedVoices[item.voice]}}">✓</text>
             </view>
@@ -162,7 +161,8 @@
             <text class="voice-name">{{item.voice}}</text>
             <view class="voice-model-row">
               <text class="voice-model">模型: {{item.target_model || '-'}}</text>
-              <text class="provider-badge provider-badge-{{item.provider === 'cosy' ? 'cosy' : 'qwen'}}" wx:if="{{currentType === 'design'}}">{{item.provider === 'cosy' ? 'Cosy' : 'Qwen'}}</text>
+              <text class="voice-speakers-badge voice-speakers-system" wx:if="{{item.in_speakers === 'system'}}">已入正式音色库</text>
+              <text class="voice-speakers-badge voice-speakers-test" wx:elif="{{item.in_speakers === 'test'}}">已在测试音色库</text>
             </view>
           </view>
         </view>
@@ -170,9 +170,12 @@
           <button class="copy-btn" size="mini" bindtap="onCopyVoice" data-voice="{{item.voice}}">
             复制
           </button>
-          <button class="delete-btn" size="mini" bindtap="onDeleteVoice" data-voice="{{item.voice}}" data-creator-openid="{{item.user_info ? item.user_info.openid : ''}}" data-account-type="{{item.account_type}}" data-provider="{{item.provider}}" wx:if="{{!item.user_info || item.user_info.type !== 'saved'}}">
+          <button class="delete-btn" size="mini" bindtap="onDeleteVoice" data-voice="{{item.voice}}" data-creator-openid="{{item.user_info ? item.user_info.openid : ''}}" data-account-type="{{item.account_type}}" data-provider="{{item.provider}}" wx:if="{{!item.in_speakers && (!item.user_info || item.user_info.type !== 'saved')}}">
             删除
           </button>
+          <text class="delete-locked-tag" wx:elif="{{item.in_speakers}}">
+            {{item.in_speakers === 'system' ? '已入正式音色库·不可删除' : '已在测试音色库·不可删除'}}
+          </text>
         </view>
       </view>
       <view class="voice-footer">
@@ -186,7 +189,7 @@
       </view>
 
       <!-- 声音设计建议清理：播放预览 + 上传到测试音色库 -->
-      <view class="voice-design-actions" wx:if="{{!batchMode && currentListTab === 'suggest' && currentType === 'design' && item.creation_log}}">
+      <view class="voice-design-actions" wx:if="{{!batchMode && currentListTab === 'suggest' && item.voice_kind === 'design' && item.creation_log}}">
         <view class="design-action-row" wx:if="{{item.creation_log.preview_audio_file_id}}">
           <text class="design-action-label">音频:</text>
           <text class="design-play-link" catchtap="onPlayAudio" data-audio-id="{{item.creation_log.preview_audio_file_id}}">
@@ -195,7 +198,7 @@
         </view>
         <view class="design-action-row">
           <text class="design-action-label"></text>
-          <text class="design-uploaded-tag" wx:if="{{item.isUploaded}}">✓ 已上传</text>
+          <text class="design-uploaded-tag" wx:if="{{item.isUploaded || item.in_speakers === 'test' || item.in_speakers === 'system'}}">✓ 已上传</text>
           <text
             class="design-upload-link"
             wx:else
@@ -233,22 +236,22 @@
 
   <!-- 列表底部加载提示 -->
   <view class="load-more" wx:if="{{voiceList.length > 0}}">
-    <text wx:if="{{hasMore}}">上拉加载更多 · 已显示 {{voiceList.length}}/{{displayCount}}</text>
+    <text wx:if="{{searching}}">点击「搜索」在全部账号中查找该音色</text>
+    <text wx:elif="{{hasMore}}">上拉加载更多 · 已显示 {{voiceList.length}}/{{displayCount}}</text>
     <text wx:else>已全部加载 · 共 {{displayCount}} 个</text>
   </view>
 
   <!-- 空状态 -->
-  <view class="empty-state" wx:if="{{currentType && !loading && voiceList.length === 0}}">
+  <view class="empty-state" wx:if="{{!loading && voiceList.length === 0}}">
     <view class="empty-icon">🎙️</view>
-    <text class="empty-text">{{currentListTab === 'suggest' ? '无需清理' : '暂无音色'}}</text>
-    <text class="empty-tip">{{currentListTab === 'suggest' ? '没有未保存且最近120天未使用的音色' : '您还没有创建任何音色'}}</text>
-  </view>
-
-  <!-- 未选择类型提示 -->
-  <view class="empty-state" wx:if="{{!currentType && !loading}}">
-    <view class="empty-icon">🎙️</view>
-    <text class="empty-text">请选择音色类型</text>
-    <text class="empty-tip">点击上方「声音克隆」或「声音设计」查看对应音色</text>
+    <block wx:if="{{searching}}">
+      <text class="empty-text">未找到音色</text>
+      <text class="empty-tip">未找到 ID 为 {{searchKeyword}} 的音色{{searchScannedLoaded ? '，请点击「搜索」在全部账号中查找' : ''}}</text>
+    </block>
+    <block wx:else>
+      <text class="empty-text">{{currentListTab === 'suggest' ? '无需清理' : '暂无音色'}}</text>
+      <text class="empty-tip">{{currentListTab === 'suggest' ? '没有未保存且最近120天未使用的音色' : '您还没有创建任何音色'}}</text>
+    </block>
   </view>
 
   <!-- 加载状态 -->

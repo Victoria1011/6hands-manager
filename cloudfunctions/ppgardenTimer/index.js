@@ -5,8 +5,12 @@
 //   - 网站同一账号同时只能托管一个花园（并发位=1），多个花园按小时错峰轮换
 //   - 每个「花园」独立配置每小时托管时段，如 [{start:0,stop:4},{start:30,stop:34}]
 //     表示每小时的 00~04 分、30~34 分托管该花园，其余时间暂停
-//   - 同一账号下不同花园的时段不允许重叠（保存校验 + 运行时守卫），支持一键随机错峰分配
-//     （时段 4~5 分钟、间隔 25~30 分钟随机）；各托管账号相互独立，跨账号时段不构成冲突
+//   - 某小时可单独配置「专属时段」（hourWindows，如 21~22 点）：
+//     该小时使用专属时段替代整体每小时时段，其余小时仍沿用整体时段
+//     取用规则见 effectiveWindows()；专属时段为空等同未配置（沿用整体时段）
+//   - 同一账号下不同花园的时段不允许重叠（保存校验 + 运行时守卫，按小时比较「有效时段」），
+//     支持一键随机错峰分配（时段 4~5 分钟、间隔 25~30 分钟随机）；
+//     各托管账号相互独立，跨账号时段不构成冲突
 //   - 每个花园有独立的定时托管开关
 //   - 执行启停前先查询网站实际托管状态：已处于目标状态的操作直接跳过，避免冗余接口调用
 //
@@ -41,6 +45,13 @@ const LOGS_COLL = 'ppgarden_logs'         // 执行日志集合
 const STATE_COLL = 'ppgarden_state'       // 全局开关（单文档 global）
 const STATE_DOC_ID = 'global'
 const TIMER_NAME = 'ppgarden-timer-minute'
+const STATUS_COLL = 'ppgarden_status'     // 花园状态（含 todayOutput.flowerLevels.flowers 的花朵 ID→名称映射）
+const FLOWER_CACHE_COLL = 'ppgarden_flower_names' // 花朵 ID → 名称 全局映射缓存
+const STOCK_COLL = 'ppgarden_stock'       // 各花园库存快照（按账号+花园，弹窗时刷新）
+
+// sell-quote 报价内存缓存（requestId -> { at, sellers }），避免 5 秒自动刷新反复调用
+const _quoteCache = {}
+const QUOTE_TTL_MS = 60 * 1000
 
 // 时段自动分配参数（随机区间）
 const MIN_WINDOW_MIN = 4    // 单时段最短（分钟）
@@ -109,6 +120,17 @@ function windowsText(windows) {
   return (windows || []).map(w => pad2(w.start) + '~' + pad2(w.stop)).join('、')
 }
 
+// 某小时的「有效时段」：优先取该小时的专属时段 cfg.hourWindows[hour]（如 21~22 点单独设置），
+// 未配置该小时专属时段时回退到整体每小时时段 cfg.windows。
+// 注意：专属时段为空数组等同未配置（仍沿用整体时段）
+function effectiveWindows(cfg, hour) {
+  if (!cfg) return []
+  const hw = cfg.hourWindows
+  const list = hw && hw[String(hour)]
+  if (Array.isArray(list) && list.length) return list
+  return Array.isArray(cfg.windows) ? cfg.windows : []
+}
+
 // ==================== 数据库工具 ====================
 // 获取集合全部文档（先 count 再并发分页）
 async function getAllDocs(collectionName) {
@@ -135,7 +157,7 @@ let _collectionsReady = null
 function ensureCollections() {
   if (!_collectionsReady) {
     _collectionsReady = (async () => {
-      for (const name of [ACCOUNTS_COLL, LOGS_COLL, STATE_COLL]) {
+      for (const name of [ACCOUNTS_COLL, LOGS_COLL, STATE_COLL, FLOWER_CACHE_COLL, STOCK_COLL]) {
         try {
           await db.createCollection(name)
           console.log('[PPGarden] 已创建集合:', name)
@@ -357,6 +379,9 @@ async function ppBulkHosting(cookie, enabled, gardenIds) {
 // 托管总览（每个花园的托管状态）
 async function ppHostingSummary(cookie) {
   const res = await httpRequest({ path: '/api/hosting-summary', cookie })
+  // 打印接口原始返回（完整数据，便于排查有哪些字段可用）
+  console.log('[PPGarden] /api/hosting-summary 原始响应, status:', res.status,
+    'body:', JSON.stringify(res.json, null, 2))
   if (res.status === 401) {
     const err = new Error('会话已失效')
     err.status = 401
@@ -372,6 +397,558 @@ async function ppGardenStateMap(cookie) {
   const map = {}
   for (const g of (json && json.gardens) || []) {
     map[g.gardenId] = g.state
+  }
+  return map
+}
+
+// 钱包信息：GET /api/wallet
+// 返回 { serverTime, paidMs, pendingMs, effectiveMs(剩余时长/毫秒), lockedMs, display, ... }
+async function ppWallet(cookie) {
+  const res = await httpRequest({ path: '/api/wallet', cookie })
+  console.log('[PPGarden] /api/wallet 原始响应, status:', res.status,
+    'body:', JSON.stringify(res.json))
+  if (res.status === 401) {
+    const err = new Error('会话已失效')
+    err.status = 401
+    throw err
+  }
+  if (res.status !== 200 || !res.json) throw new Error('查询钱包失败：HTTP ' + res.status)
+  return res.json
+}
+
+// 交易记录：GET /api/trade/orders?role=sell|buy
+// 返回数组，元素含 { id, orderId, kind, role, flowerId, quality, groups, pricePerGroup,
+//   feePerGroup, status, createdAt, updatedAt, settledAt, legs:[{ sellerGardenId, groups, ... }] }
+async function ppOrders(cookie, role) {
+  const r = role === 'buy' ? 'buy' : 'sell'
+  const res = await httpRequest({ path: '/api/trade/orders?role=' + r, cookie })
+  console.log('[PPGarden] /api/trade/orders?role=' + r + ' 原始响应, status:', res.status,
+    'body:', JSON.stringify(res.json).slice(0, 2000))
+  if (res.status === 401) {
+    const err = new Error('会话已失效')
+    err.status = 401
+    throw err
+  }
+  if (res.status !== 200 || !res.json) throw new Error('查询交易记录失败：HTTP ' + res.status)
+  // 兼容数组或 { items/orders/list: [] } 两种返回结构
+  if (Array.isArray(res.json)) return res.json
+  for (const k of ['items', 'orders', 'list', 'data']) {
+    if (Array.isArray(res.json[k])) return res.json[k]
+  }
+  return []
+}
+
+// 求购列表：GET /api/trade/requests?channel=official
+// 返回数组，元素含 { id, orderId, flowerId, quality, groups, pricePerGroup, sellPrice?, deadlineAt, ... }
+// 兼容数组或 { items/requests/list: [] }
+async function ppTradeRequests(cookie) {
+  const res = await httpRequest({ path: '/api/trade/requests?channel=official', cookie })
+  console.log('[PPGarden] /api/trade/requests 原始响应, status:', res.status,
+    'body:', JSON.stringify(res.json).slice(0, 1500))
+  if (res.status === 401) {
+    const err = new Error('会话已失效')
+    err.status = 401
+    throw err
+  }
+  if (res.status !== 200 || !res.json) throw new Error('查询求购列表失败：HTTP ' + res.status)
+  if (Array.isArray(res.json)) return res.json
+  for (const k of ['items', 'requests', 'list', 'data']) {
+    if (Array.isArray(res.json[k])) return res.json[k]
+  }
+  return []
+}
+
+// 「只看我能卖的」：GET /api/trade/sellable-stock?channel=official
+// 返回 { items: [{ flowerId, quality, sellableGroups }] }，表示当前账号可卖的花朵及组数
+async function ppSellableStock(cookie) {
+  const res = await httpRequest({ path: '/api/trade/sellable-stock?channel=official', cookie })
+  console.log('[PPGarden] /api/trade/sellable-stock 原始响应, status:', res.status,
+    'body:', JSON.stringify(res.json).slice(0, 800))
+  if (res.status === 401) {
+    const err = new Error('会话已失效')
+    err.status = 401
+    throw err
+  }
+  if (res.status !== 200 || !res.json) throw new Error('查询可卖库存失败：HTTP ' + res.status)
+  if (Array.isArray(res.json)) return res.json
+  for (const k of ['items', 'stocks', 'list', 'data']) {
+    if (Array.isArray(res.json[k])) return res.json[k]
+  }
+  return []
+}
+
+// 花园货架（库存）：GET /api/trade/listings?gardenId={gardenId}
+// 返回该花园的库存明细，关键字段：
+//   summary: { count, sellableGroups, totalGroups, buyingGroups, lastSaleAt, lastAt }
+//   items: [{ flowerId, quality, count, groups, sellableGroups, sellGroups,
+//             sellPricePerGroup, pricePerGroup, sellCapMin, sellCapMax, hasSellRange, enabled }]
+async function ppGardenListings(cookie, gardenId) {
+  const res = await httpRequest({
+    path: '/api/trade/listings?gardenId=' + encodeURIComponent(gardenId),
+    cookie,
+    timeoutMs: 12000
+  })
+  if (res.status === 401) {
+    const err = new Error('会话已失效')
+    err.status = 401
+    throw err
+  }
+  const s = res.json && res.json.summary
+  console.log('[PPGarden][库存] /api/trade/listings gardenId:', gardenId,
+    'status:', res.status,
+    'summary:', JSON.stringify(s),
+    'items数:', Array.isArray(res.json && res.json.items) ? res.json.items.length : (res.json && res.json.items === undefined ? 'items字段缺失' : typeof (res.json || {}).items),
+    'body顶层字段:', JSON.stringify(res.json && typeof res.json === 'object' && !Array.isArray(res.json) ? Object.keys(res.json) : typeof res.json),
+    'body前600字符:', JSON.stringify(res.json).slice(0, 600))
+  if (res.status !== 200 || !res.json) throw new Error('查询花园库存失败：HTTP ' + res.status)
+  return res.json
+}
+
+// 卖花报价：GET /api/trade/requests/{requestId}/sell-quote
+// 返回 { requestId, pricePerGroup, sellerGetsPerGroup, remainingGroups,
+//        sellers: [{ gardenId, haveCount, sellableGroups, groups, blockCode, blockText }],
+//        mode: 'direct_sell' }
+// 这是网页点击「卖给他」时用来判断各账号可卖几组的接口。
+async function ppSellQuote(cookie, requestId, quiet) {
+  const paths = [
+    '/api/trade/requests/' + encodeURIComponent(requestId) + '/sell-quote',
+    '/api/trade/requests/' + encodeURIComponent(requestId) + '/self-quote'
+  ]
+  let lastErr = null
+  for (const p of paths) {
+    const res = await httpRequest({ path: p, cookie, timeoutMs: 12000 })
+    if (!quiet) {
+      console.log('[PPGarden] sell-quote 原始响应', p, 'status:', res.status,
+        'body:', JSON.stringify(res.json).slice(0, 800))
+    }
+    if (res.status === 401) {
+      const err = new Error('会话已失效')
+      err.status = 401
+      throw err
+    }
+    if (res.status === 200 && res.json) return res.json
+    lastErr = new Error('查询卖花报价失败：HTTP ' + res.status)
+  }
+  throw lastErr || new Error('查询卖花报价失败')
+}
+
+// 接单卖花：POST /api/trade/requests/{requestId}/accept
+// 请求体（站点白名单校验，只能含这三个字段）：
+//   { sellerGardenId, groups, expect: { pricePerGroup, targetCount } }
+async function ppAcceptRequest(cookie, requestId, groups, pricePerGroup, gardenId, targetCount) {
+  const path = '/api/trade/requests/' + encodeURIComponent(requestId) + '/accept'
+  const body = {
+    sellerGardenId: gardenId,
+    groups,
+    expect: {
+      pricePerGroup: Number(pricePerGroup) || 0,
+      targetCount: Number(targetCount) || 0
+    }
+  }
+  const res = await httpRequest({ method: 'POST', path, body, cookie, timeoutMs: 12000 })
+  console.log('[PPGarden] 接单响应 status:', res.status,
+    '请求体:', JSON.stringify(body),
+    'body:', JSON.stringify(res.json).slice(0, 600))
+  if (res.status === 401) {
+    const err = new Error('会话已失效')
+    err.status = 401
+    throw err
+  }
+  if (res.status !== 200 || !res.json) {
+    const msg = (res.json && (res.json.message || res.json.error)) ? (res.json.message || res.json.error) : ('HTTP ' + res.status)
+    throw new Error('接单失败：' + msg)
+  }
+  return res.json
+}
+
+// 汇总一条求购的可卖情况：合计组数 / 是否可接单 / 每个花园是否可接单
+// 注意：groups 变化（如用 sell-quote 覆盖）后需要重新调用一次
+function finalizeRequestItem(it) {
+  const list = Array.isArray(it.gardenStockList) ? it.gardenStockList : []
+  const totalGroups = list.reduce((n, x) => n + (Number(x.groups) > 0 ? Number(x.groups) : 0), 0)
+  it.sellableGroups = totalGroups
+  it.sellableText = totalGroups > 0 ? ('可卖 ' + totalGroups + ' 组') : ''
+  it.hasStockGardens = list.filter(x => Number(x.groups) > 0).length
+
+  // 不可接单的原因（按优先级）：非开放 > 买家排队已满 > 买家游戏中 > 暂停 > 无可卖组数
+  let reason = ''
+  if (it.status !== 'open') {
+    reason = '求购已结束'
+  } else if (it.buyerQueueFull) {
+    reason = '对方排队已满'
+  } else if (it.buyerPlaying) {
+    reason = '对方正在游戏'
+  } else if (it.pausedReason) {
+    reason = it.pausedText || '求购已暂停'
+  } else if (!totalGroups) {
+    reason = '无可卖库存'
+  }
+  it.blockReason = reason
+  it.canAccept = !reason && totalGroups > 0
+  list.forEach(x => {
+    x.canAcceptGarden = !reason && (Number(x.groups) || 0) > 0
+  })
+}
+
+// 批量拉取 sell-quote，用站点实时可卖组数覆盖各花园的 groups
+// 每条求购一次请求，按并发 6 批处理；超出上限的条目保持原值
+async function attachSellQuotes(acc, items, maxItems) {
+  // 只对「有库存、可能能接」的花朵请求报价，无库存的直接跳过
+  const candidates = items.filter(it =>
+    (it.gardenStockList || []).some(x => (Number(x.count) || 0) > 0))
+  const list = candidates.slice(0, maxItems || candidates.length)
+  if (!list.length) return 0
+  const CONCURRENCY = 6
+  const now = Date.now()
+  let ok = 0
+  let hit = 0
+  // 简单清理过期缓存，防止内存无限增长
+  if (Object.keys(_quoteCache).length > 500) {
+    for (const k of Object.keys(_quoteCache)) {
+      if (now - _quoteCache[k].at >= QUOTE_TTL_MS) delete _quoteCache[k]
+    }
+  }
+  for (let i = 0; i < list.length; i += CONCURRENCY) {
+    const batch = list.slice(i, i + CONCURRENCY)
+    await Promise.all(batch.map(async it => {
+      if (it.requestId == null) return
+      try {
+        // 60 秒内复用同一条求购的报价，避免 5 秒自动刷新反复打接口
+        const cached = _quoteCache[it.requestId]
+        let sellers
+        if (cached && now - cached.at < QUOTE_TTL_MS) {
+          sellers = cached.sellers
+          hit++
+        } else {
+          const quote = await withSession(acc, c => ppSellQuote(c, it.requestId, true))
+          sellers = (quote && (quote.sellers || quote.sellerLegs)) || []
+          _quoteCache[it.requestId] = { at: now, sellers }
+        }
+        if (!sellers.length) return
+        const byId = {}
+        sellers.forEach(s => { if (s && s.gardenId) byId[s.gardenId] = s })
+        ;(it.gardenStockList || []).forEach(x => {
+          const leg = byId[x.gardenId]
+          if (!leg) return
+          const g = Number(leg.groups)
+          x.groups = Number.isFinite(g) ? g : (Number(leg.sellableGroups) || 0)
+          x.sellableGroups = Number(leg.sellableGroups) || x.groups
+          if (leg.haveCount != null) x.count = Number(leg.haveCount) || 0
+          if (leg.blockText) x.blockText = leg.blockText
+          x.hasStock = x.groups > 0
+        })
+        it.quoteLoaded = true
+        ok++
+      } catch (e) {
+        // 单条失败忽略，保留原有组数
+      }
+    }))
+  }
+  list.forEach(finalizeRequestItem)
+  console.log('[PPGarden][报价] sell-quote 覆盖完成:', ok, '/', list.length, '缓存命中:', hit)
+  return ok
+}
+
+// ==================== 花园库存（各花园 × 各花朵 可卖组数） ====================
+// 拉取当前账号下每个花园的货架库存并写入 ppgarden_stock（每次调用刷新一次），
+// 返回结构：
+//   {
+//     gardens: [{ gardenId, gardenName, sellableGroups, totalGroups, summary }],
+//     flowers: { "<flowerId>_<quality>": { "<gardenId>": sellableGroups } },
+//     byFlower: { "<flowerId>": { "<gardenId>": sellableGroups } },
+//     updatedAt
+//   }
+async function refreshAccountStock(acc) {
+  const gardens = Array.isArray(acc.gardenList) ? acc.gardenList : []
+  console.log('[PPGarden][库存] 账号:', acc.remark || acc.username, '_id:', acc._id,
+    'gardenList 长度:', gardens.length,
+    'gardenList:', JSON.stringify(gardens))
+  const gardensOut = []
+  // flowersByKey: "flowerId_quality" -> { gardenId: sellableGroups }（只记录有库存的花园）
+  const flowersByKey = {}
+  // flowersByFlower: "flowerId" -> { gardenId: sellableGroups }
+  const flowersByFlower = {}
+  // gardenFlowerStock: gardenId -> { "flowerId_quality": { sellableGroups, count, enabled, sellCapMax, ... } }
+  // 记录该花园所有花（含可卖为 0 的），用于展示「哪个花园有多少可卖」
+  const gardenFlowerStock = {}
+
+  const CONCURRENCY = 4
+  for (let i = 0; i < gardens.length; i += CONCURRENCY) {
+    const batch = gardens.slice(i, i + CONCURRENCY)
+    await Promise.all(batch.map(async g => {
+      try {
+        const listing = await withSession(acc, c => ppGardenListings(c, g.id))
+        // 兼容多种返回形态：{items|listings|list|data: []} 或直接是数组
+        let list = []
+        if (Array.isArray(listing)) list = listing
+        else if (listing) {
+          for (const k of ['items', 'listings', 'list', 'data']) {
+            if (Array.isArray(listing[k])) { list = listing[k]; break }
+          }
+        }
+        const summary = (listing && !Array.isArray(listing) && listing.summary) || null
+        console.log('[PPGarden] 花园库存原始响应:', g.name || g.id,
+          'summary:', JSON.stringify(summary),
+          'items数:', list.length,
+          '样本:', JSON.stringify(list.slice(0, 2)))
+        let gardenStockTotal = 0
+        const perFlower = {}
+        for (const li of list) {
+          if (!li) continue
+          const fid = String(li.flowerId != null ? li.flowerId : (li.id != null ? li.id : ''))
+          if (!fid) continue
+          const quality = li.quality || 0
+          const key = fid + '_' + quality
+          // 库存数量直接取 count（花朵朵数），不做组数换算
+          const qty = Number(li.count) || 0
+          const prev = perFlower[key]
+          perFlower[key] = {
+            count: (prev ? prev.count : 0) + qty,
+            enabled: prev && prev.enabled ? true : !!li.enabled,
+            hasSellRange: li.hasSellRange !== undefined ? !!li.hasSellRange : (prev ? prev.hasSellRange : null),
+            sellCapMax: li.sellCapInputMax != null ? li.sellCapInputMax : (li.sellCapMax != null ? li.sellCapMax : null),
+            sellPricePerGroup: li.sellPricePerGroup != null ? li.sellPricePerGroup : (prev ? prev.sellPricePerGroup : null)
+          }
+          if (qty) {
+            flowersByKey[key] = flowersByKey[key] || {}
+            flowersByKey[key][g.id] = (flowersByKey[key][g.id] || 0) + qty
+            flowersByFlower[fid] = flowersByFlower[fid] || {}
+            flowersByFlower[fid][g.id] = (flowersByFlower[fid][g.id] || 0) + qty
+            gardenStockTotal += qty
+          }
+        }
+        gardenFlowerStock[g.id] = perFlower
+        // 诊断：逐花园打印解析结果（key -> 库存数量 / 是否启用）
+        const perFlowerBrief = {}
+        Object.keys(perFlower).forEach(k => {
+          const v = perFlower[k]
+          perFlowerBrief[k] = { count: v.count, enabled: v.enabled }
+        })
+        console.log('[PPGarden][库存] 花园解析结果:', g.name || g.id, 'gardenId:', g.id,
+          '库存合计:', gardenStockTotal, '明细:', JSON.stringify(perFlowerBrief))
+        gardensOut.push({
+          gardenId: g.id,
+          gardenName: g.name || g.id,
+          stockCount: gardenStockTotal,
+          totalGroups: summary ? summary.totalGroups : null,
+          listedKinds: summary ? summary.listedKinds : null,
+          summary
+        })
+      } catch (e) {
+        console.error('[PPGarden][库存] 查询花园库存失败:', g.name || g.id, 'gardenId:', g.id, e.message)
+        gardenFlowerStock[g.id] = {}
+        gardensOut.push({
+          gardenId: g.id,
+          gardenName: g.name || g.id,
+          stockCount: 0,
+          error: e.message || '查询失败'
+        })
+      }
+    }))
+  }
+
+  const snapshot = {
+    accountId: acc._id,
+    accountName: acc.remark || acc.username,
+    gardens: gardensOut,
+    flowers: flowersByKey,
+    byFlower: flowersByFlower,
+    gardenFlowerStock,
+    updatedAt: db.serverDate()
+  }
+
+  // 写入数据库（每账号一条，用 accountId 作为 _id 便于覆盖）
+  // 注意：db.update 是「字段合并」，若卡片字段类型变化（如 gardenFlowerStock 由数字变对象）会报
+  // Cannot create field 'count' in element {...}；这里用 set 整份覆盖写入，语义更安全。
+  try {
+    const docId = 'acc_' + acc._id
+    const coll = db.collection(STOCK_COLL)
+    await coll.doc(docId).set({
+      data: Object.assign({ _id: docId }, snapshot)
+    }).catch(async () => {
+      // 兼容部分环境 doc.set 不支持：退化为「先删后加」
+      await coll.doc(docId).remove().catch(() => {})
+      await coll.add({ data: Object.assign({ _id: docId }, snapshot) })
+    })
+  } catch (e) {
+    console.error('[PPGarden] 写入库存快照失败（忽略）:', e.message)
+  }
+
+  return {
+    gardens: gardensOut,
+    flowers: flowersByKey,
+    byFlower: flowersByFlower,
+    gardenFlowerStock,
+    updatedAt: Date.now()
+  }
+}
+
+// 查询/刷新某账号库存（action: gardenStock）
+async function handleGardenStock(event) {
+  const _id = event._id
+  if (!_id) return { code: 400, message: '缺少 _id' }
+  let acc
+  try {
+    const res = await db.collection(ACCOUNTS_COLL).doc(_id).get()
+    acc = res.data
+  } catch (e) {
+    return { code: 404, message: '账号不存在' }
+  }
+  if (!acc) return { code: 404, message: '账号不存在' }
+
+  try {
+    const stock = await refreshAccountStock(acc)
+    const nameMap = await getFlowerNameMap()
+    // 汇总各花园可卖总数 + 每个有库存的花朵明细（含名称）
+    const flowers = []
+    const keySet = Object.keys(stock.flowers)
+    for (const key of keySet) {
+      const parts = key.split('_')
+      const fid = parts[0]
+      const quality = Number(parts[1]) || 0
+      const perGarden = stock.flowers[key]
+      const total = Object.keys(perGarden).reduce((n, gid) => n + perGarden[gid], 0)
+      if (!total) continue
+      flowers.push({
+        flowerId: fid,
+        flowerName: nameMap[fid] || ('花朵 ' + fid),
+        quality,
+        perGarden: Object.keys(perGarden).map(gid => ({
+          gardenId: gid,
+          gardenName: (acc.gardenList || []).find(x => x.id === gid) ? (acc.gardenList || []).find(x => x.id === gid).name : gid,
+          count: perGarden[gid]
+        })),
+        total
+      })
+    }
+    flowers.sort((a, b) => b.total - a.total)
+
+    console.log('[PPGarden][库存] gardenStock 返回:', 'accountId:', _id,
+      'gardens:', JSON.stringify(stock.gardens.map(x => ({ name: x.gardenName, count: x.stockCount, err: x.error || '' }))),
+      '有库存花朵数:', flowers.length,
+      '花朵明细:', JSON.stringify(flowers.slice(0, 5)))
+
+    return {
+      code: 0,
+      message: 'success',
+      data: {
+        accountId: _id,
+        gardens: stock.gardens,
+        flowers,
+        updatedAt: stock.updatedAt
+      }
+    }
+  } catch (err) {
+    console.error('[PPGarden] 刷新库存失败:', err.message)
+    return { code: 500, message: err.message || '刷新库存失败' }
+  }
+}
+
+// ==================== 花朵 ID → 名称 映射 ====================
+// 数据来源：ppgarden_status 集合里的花朵列表（主路径：根级 flowers[]
+// 形如 [{ flowerId: 23078, name: '星河映蕊', quality: 5, ... }]；
+// 兼容 status.flowerLevels.flowers 与任意嵌套层级），聚合成全局映射并缓存，
+// 供交易列表/求购列表按 flowerId 显示花朵名称。
+async function getFlowerNameMap() {
+  // 1) 先读已有缓存（单文档 global），作为基线（历史累计，避免花朵换季/轮作后名称丢失）
+  let map = {}
+  try {
+    const cached = await db.collection(FLOWER_CACHE_COLL).doc('global').get()
+    map = Object.assign({}, (cached.data && cached.data.map) || {})
+  } catch (e) { /* 缓存不存在，继续重新聚合 */ }
+
+  // 2) 从 ppgarden_status 聚合补充（合并进基线，不覆盖已有名称）
+  let added = 0
+  let flowerCount = 0
+  try {
+    const countRes = await db.collection(STATUS_COLL).count()
+    console.log('[PPGarden] ppgarden_status 文档数(count):', countRes.total)
+    const docs = await getAllDocs(STATUS_COLL)
+    console.log('[PPGarden] ppgarden_status 实际读取文档数:', docs.length)
+    let sampleLogged = false
+
+    // 兜底：从任意对象里递归找出所有形如 { flowerId, name } 的花卉项（兼容任意嵌套层级/字段名）
+    const collectFlowers = (node, depth) => {
+      if (!node || depth > 6) return
+      if (Array.isArray(node)) {
+        for (const it of node) collectFlowers(it, depth + 1)
+        return
+      }
+      if (typeof node === 'string') {
+        // 可能是被序列化的 JSON 字符串
+        const s = node.trim()
+        if (s && (s[0] === '{' || s[0] === '[')) {
+          try { collectFlowers(JSON.parse(s), depth + 1) } catch (e) { /* 非 JSON，忽略 */ }
+        }
+        return
+      }
+      if (typeof node !== 'object') return
+      // 命中花卉项：同时有 flowerId 和 name
+      if (node.flowerId != null && node.name) {
+        flowerCount++
+        const id = String(node.flowerId)
+        if (map[id] !== node.name) { map[id] = node.name; added++ }
+        if (!sampleLogged) {
+          console.log('[PPGarden] 花朵样本:', JSON.stringify(node))
+          sampleLogged = true
+        }
+        return
+      }
+      for (const k of Object.keys(node)) collectFlowers(node[k], depth + 1)
+    }
+
+    for (const doc of docs) {
+      // 主路径：根级 flowers[]（{ flowerId, name, quality, goldNeededPerGroup, hasSellRange }）
+      if (Array.isArray(doc && doc.flowers)) {
+        for (const f of doc.flowers) {
+          if (f && f.flowerId != null && f.name) {
+            flowerCount++
+            const id = String(f.flowerId)
+            if (map[id] !== f.name) { map[id] = f.name; added++ }
+          }
+        }
+      }
+      // 兼容旧路径：status.flowerLevels.flowers
+      const levels = (doc && doc.status && doc.status.flowerLevels) || null
+      const levelFlowers = (levels && Array.isArray(levels.flowers)) ? levels.flowers : []
+      for (const f of levelFlowers) {
+        if (f && f.flowerId != null && f.name) {
+          flowerCount++
+          const id = String(f.flowerId)
+          if (map[id] !== f.name) { map[id] = f.name; added++ }
+        }
+      }
+      // 兜底：递归扫描任意层级
+      collectFlowers(doc, 0)
+    }
+
+    if (!sampleLogged && docs.length) {
+      const d0 = docs[0] || {}
+      console.log('[PPGarden] ppgarden_status 文档字段样本:', JSON.stringify(Object.keys(d0)))
+      console.log('[PPGarden] 根级 flowers 长度:', Array.isArray(d0.flowers) ? d0.flowers.length : 0)
+    }
+    console.log('[PPGarden] 本次扫描到花朵条目数:', flowerCount)
+  } catch (e) {
+    console.error('[PPGarden] 聚合花朵名称失败:', e.message)
+  }
+
+  console.log('[PPGarden] 花朵名称映射数量:', Object.keys(map).length, '本次新增/更新:', added)
+  // 3) 有新数据才写回缓存（失败不影响返回）
+  if (added > 0) {
+    try {
+      const exists = await db.collection(FLOWER_CACHE_COLL).doc('global').get().then(() => true).catch(() => false)
+      if (exists) {
+        await db.collection(FLOWER_CACHE_COLL).doc('global').update({
+          data: { map, updatedAt: db.serverDate() }
+        })
+      } else {
+        await db.collection(FLOWER_CACHE_COLL).add({
+          data: { _id: 'global', map, updatedAt: db.serverDate() }
+        })
+      }
+    } catch (e) {
+      console.error('[PPGarden] 缓存花朵名称映射失败（忽略）:', e.message)
+    }
   }
   return map
 }
@@ -435,6 +1012,9 @@ function normalizeSiteActivity(json) {
 // 网站内添加的花园列表（仅刷新名称信息，不影响各花园的时段配置）
 async function loadAndCacheGardens(acc, cookie) {
   const res = await httpRequest({ path: '/api/gardens', cookie })
+  // 打印接口原始返回（完整数据，便于排查有哪些字段可用）
+  console.log('[PPGarden] /api/gardens 原始响应，账号:', acc.remark || acc.username,
+    'status:', res.status, 'body:', JSON.stringify(res.json, null, 2))
   if (res.status === 401) {
     const err = new Error('会话已失效')
     err.status = 401
@@ -443,6 +1023,10 @@ async function loadAndCacheGardens(acc, cookie) {
   if (res.status !== 200 || !res.json || !Array.isArray(res.json.gardens)) {
     throw new Error('加载花园列表失败：HTTP ' + res.status)
   }
+  // 打印每个花园的完整原始对象（看到的字段都是网站返回的，未做任何裁剪）
+  res.json.gardens.forEach((g, i) => {
+    console.log('[PPGarden] 花园原始数据[' + i + ']:', JSON.stringify(g, null, 2))
+  })
   const gardens = res.json.gardens.map(g => ({
     id: g.id,
     name: (g.alias && g.alias.trim()) || g.nickname || g.gameUid || g.id,
@@ -452,6 +1036,7 @@ async function loadAndCacheGardens(acc, cookie) {
   await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
     data: { gardenList: gardens, gardenLoadDate: cstDateStr(nowCST()), gardenListUpdatedAt: db.serverDate() }
   }).catch(() => {})
+  console.log('[PPGarden] 花园列表已缓存（裁剪后）:', JSON.stringify(gardens, null, 2))
   return gardens
 }
 
@@ -510,9 +1095,9 @@ function circularGap(a, b) {
   return Math.min(g1, g2)
 }
 
-// 收集同一托管账号下其它花园已占用的时段 [{start, stop, ownerName}]（可排除某花园）
+// 收集同一托管账号下其它花园在「某小时」已占用的有效时段 [{start, stop, ownerName}]（可排除某花园）
 // 网站的并发托管位按账号独立计算，各托管账号相互独立，跨账号时段不构成冲突
-function collectOccupied(acc, exceptGardenId) {
+function collectOccupied(acc, exceptGardenId, hour) {
   const occupied = []
   if (!acc || acc.enabled === false) return occupied
   const gardens = Array.isArray(acc.gardenList) ? acc.gardenList : []
@@ -521,35 +1106,70 @@ function collectOccupied(acc, exceptGardenId) {
     if (g.id === exceptGardenId) continue
     const cfg = configs[g.id]
     if (!cfg) continue
-    for (const w of (Array.isArray(cfg.windows) ? cfg.windows : [])) {
+    for (const w of effectiveWindows(cfg, hour)) {
       occupied.push({ start: w.start, stop: w.stop, ownerName: g.name || g.id })
     }
   }
   return occupied
 }
 
-// 跨花园冲突检查：overlap=重叠（禁止），close=间距过近（警告）
+// 收集其它花园的「全部」时段（整体时段 + 各小时专属时段），供一键随机分配使用：
+// 生成的整体时段需避开这些占用，避免与 21~22 点等专属时段撞车
+function collectOccupiedAll(acc, exceptGardenId) {
+  const occupied = []
+  if (!acc || acc.enabled === false) return occupied
+  const gardens = Array.isArray(acc.gardenList) ? acc.gardenList : []
+  const configs = acc.gardenConfigs || {}
+  const push = (list, ownerName) => {
+    for (const w of (Array.isArray(list) ? list : [])) {
+      occupied.push({ start: w.start, stop: w.stop, ownerName })
+    }
+  }
+  for (const g of gardens) {
+    if (g.id === exceptGardenId) continue
+    const cfg = configs[g.id]
+    if (!cfg) continue
+    const ownerName = g.name || g.id
+    push(cfg.windows, ownerName)
+    const hw = cfg.hourWindows || {}
+    for (const h of Object.keys(hw)) push(hw[h], ownerName)
+  }
+  return occupied
+}
+
+// 跨花园冲突检查：只有时段「真正重叠」才算冲突（首尾相接、仅差 1 分钟均不算重叠）
 function checkCrossConflict(occupied, windows) {
   let conflictName = null
-  let minGap = Infinity
-  let closeName = null
   for (const w of windows) {
     for (const o of occupied) {
       if (w.start < o.stop && o.start < w.stop) {
         if (!conflictName) conflictName = o.ownerName
       }
-      const gap = circularGap(w, o)
-      if (gap < minGap) {
-        minGap = gap
-        if (gap < MIN_CROSS_GAP_MIN) closeName = o.ownerName
-      }
     }
   }
-  return {
-    conflictName,
-    closeName,
-    minGap: minGap === Infinity ? null : minGap
+  return { conflictName }
+}
+
+// 逐小时检查某花园的新配置是否与同账号其它花园冲突
+// （21~22 点等专属时段可能与其它花园的整体时段撞车，必须按小时比较「有效时段」）
+// 返回 { conflictHour, conflictName }
+function findCrossConflict(acc, gardenId, cfg) {
+  let conflictHour = null
+  let conflictName = null
+
+  for (let h = 0; h < 24; h++) {
+    const mine = effectiveWindows(cfg, h)
+    if (!mine.length) continue
+    const occupied = collectOccupied(acc, gardenId, h)
+    if (!occupied.length) continue
+    const r = checkCrossConflict(occupied, mine)
+    if (r.conflictName && conflictHour === null) {
+      conflictHour = h
+      conflictName = r.conflictName
+    }
   }
+
+  return { conflictHour, conflictName }
 }
 
 // 为一个花园随机生成「每小时两个时段」：时段 4~5 分钟、间隔 25~30 分钟，
@@ -593,14 +1213,15 @@ function generateWindows(occupied) {
 // ==================== 工作循环 ====================
 // 同一账号下其它花园是否正在托管：时段覆盖当前分钟、本小时已执行过启动、且尚未执行暂停
 // （并发托管位按账号独立计算，只需检查同一账号内的其它花园）
-function isPeerHosting(acc, exceptGardenId, minuteOfHour, hourSlot) {
+function isPeerHosting(acc, exceptGardenId, minuteOfHour, hourSlot, hour) {
   const gardens = Array.isArray(acc.gardenList) ? acc.gardenList : []
   const configs = acc.gardenConfigs || {}
   return gardens.some(g => {
     if (g.id === exceptGardenId) return false
     const cfg = configs[g.id]
     if (!cfg || cfg.schedEnabled === false) return false
-    const wins = Array.isArray(cfg.windows) ? cfg.windows : []
+    // 该花园当前小时的有效时段（21~22 点可能使用专属时段）
+    const wins = effectiveWindows(cfg, hour)
     return wins.some((w, wi) => {
       if (!(minuteOfHour >= w.start && minuteOfHour <= w.stop)) return false
       const key = g.id + '_' + wi
@@ -705,7 +1326,13 @@ async function executeGardenAction(acc, garden, action, wi, w, cookie, ctx, hour
 async function processAccount(acc, ctx) {
   const { today, nowC, results } = ctx
   const minuteOfHour = nowC.getUTCMinutes()
+  const hourOfDay = nowC.getUTCHours()
   const hourSlot = hourSlotOf(nowC)
+
+  // 打印账号当前缓存的完整花园与时段配置（定位「专属时段是否还在库里」时最有用）
+  console.log('[PPGarden] 账号数据, 账号:', acc.remark || acc.username,
+    'gardenList:', JSON.stringify(acc.gardenList || []),
+    'gardenConfigs:', JSON.stringify(acc.gardenConfigs || {}))
 
   // 1. 会话：每天登录一次
   let cookie
@@ -755,20 +1382,23 @@ async function processAccount(acc, ctx) {
   }
 
   // 3. 每花园每小时时段任务（先统一处理暂停，再处理启动，减少撞车窗口）
+  //    时段按「当前小时」取有效时段：21~22 点若单独配置了专属时段，则用专属时段替代整体时段
   const gardens = Array.isArray(acc.gardenList) ? acc.gardenList : []
   const configs = acc.gardenConfigs || {}
   const activeGardens = gardens
     .map(g => ({ g, cfg: configs[g.id] }))
-    .filter(x => x.cfg && x.cfg.schedEnabled !== false && Array.isArray(x.cfg.windows) && x.cfg.windows.length)
+    .filter(x => x.cfg && x.cfg.schedEnabled !== false)
+    .map(x => ({ g: x.g, cfg: x.cfg, windows: effectiveWindows(x.cfg, hourOfDay) }))
+    .filter(x => x.windows.length)
 
   if (!activeGardens.length) return { cookie }
 
   // 收集本分钟到期的启停任务
   const duePauses = []
   const dueStarts = []
-  for (const { g, cfg } of activeGardens) {
-    for (let wi = 0; wi < cfg.windows.length; wi++) {
-      const w = cfg.windows[wi]
+  for (const { g, windows } of activeGardens) {
+    for (let wi = 0; wi < windows.length; wi++) {
+      const w = windows[wi]
       const key = g.id + '_' + wi
       if ((acc.doneStop || {})[key] !== hourSlot &&
           minuteOfHour >= w.stop && minuteOfHour < w.stop + STOP_TOLERANCE_MIN) {
@@ -805,7 +1435,7 @@ async function processAccount(acc, ctx) {
   // 再处理启动：实际已在托管/排队中（受阻除外）则只做标记，不调接口
   for (const { g, wi, w, key } of dueStarts) {
     // 运行时守卫：同一账号下其它花园本小时已在其时段内启动且尚未暂停 → 本次跳过，下分钟重试
-    if (isPeerHosting(acc, g.id, minuteOfHour, hourSlot)) {
+    if (isPeerHosting(acc, g.id, minuteOfHour, hourSlot, hourOfDay)) {
       console.log('[PPGarden] 同账号其它花园托管进行中，本次跳过启动:', acc.username, g.name)
       continue
     }
@@ -1100,6 +1730,13 @@ async function handleLoadGardens(event) {
 async function handleSetGardenConfig(event) {
   const _id = event._id
   const gardenId = event.gardenId
+  console.log('[PPGarden] setGardenConfig 入参:', JSON.stringify({
+    _id, gardenId,
+    windows: event.windows,
+    hourWindows: event.hourWindows,
+    replaceHourWindows: event.replaceHourWindows,
+    schedEnabled: event.schedEnabled
+  }))
   if (!_id || !gardenId) return { code: 400, message: '缺少 _id 或 gardenId' }
 
   let acc
@@ -1114,28 +1751,11 @@ async function handleSetGardenConfig(event) {
   const configs = Object.assign({}, acc.gardenConfigs || {})
   const cfg = Object.assign({ windows: [], schedEnabled: false }, configs[gardenId] || {})
 
-  let warning = ''
-  if (event.windows !== undefined) {
-    const windows = Array.isArray(event.windows)
-      ? event.windows.map(w => ({ start: Number(w.start), stop: Number(w.stop) }))
-      : []
+  const gardenName = gardenNameOf(acc, gardenId) || '花园'
 
-    if (windows.length) {
-      const v = validateWindows(windows)
-      if (!v.ok) return { code: 400, message: v.error }
-      // 与同一账号下其它花园的时段查重叠（各账号独立，跨账号不冲突）
-      const occupied = collectOccupied(acc, gardenId)
-      const c = checkCrossConflict(occupied, windows)
-      if (c.conflictName) {
-        return { code: 400, message: '时段与本账号花园「' + c.conflictName + '」重叠，同一账号同一时间只能托管一个花园，请错开' }
-      }
-      if (c.closeName) {
-        warning = '（提示：与花园「' + c.closeName + '」的时段仅隔 ' + (c.minGap === null ? '-' : c.minGap) + ' 分钟，建议再错开一些）'
-      }
-    }
-
-    cfg.windows = windows
-    // 时段变化后清空本小时完成标记，避免旧标记阻塞新时段
+  // 整体时段或某小时专属时段（如 21~22 点）发生变化时，
+  // 统一按小时做一次冲突校验，并清空本小时完成标记，避免旧标记阻塞新时段
+  const saveConfigsWithReset = async () => {
     configs[gardenId] = cfg
     await db.collection(ACCOUNTS_COLL).doc(_id).update({
       data: {
@@ -1145,13 +1765,77 @@ async function handleSetGardenConfig(event) {
         updatedAt: db.serverDate()
       }
     })
+  }
 
-    return {
-      code: 0,
-      message: windows.length
-        ? '花园「' + (gardenNameOf(acc, gardenId) || '花园') + '」时段已保存：每小时 ' + windowsText(windows) + ' 分' + warning
-        : '花园时段已清空，该花园将不参与定时托管' + warning
+  // 解析并校验一组时段（空数组表示清空）
+  const parseWindows = (raw) => {
+    const windows = Array.isArray(raw)
+      ? raw.map(w => ({ start: Number(w.start), stop: Number(w.stop) }))
+      : []
+    if (!windows.length) return { ok: true, windows }
+    const v = validateWindows(windows)
+    if (!v.ok) return { ok: false, error: v.error }
+    return { ok: true, windows }
+  }
+
+  // 1) 整体每小时时段 + 某小时专属时段（可在同一次请求中一并提交，避免中间态）
+  //    hourWindows 为整份映射，传 undefined 表示不改动；
+  //    replaceHourWindows=true 时，即使传空映射也执行整份覆盖（用于清除全部专属时段）
+  const hasWindows = event.windows !== undefined
+  const hasHourWindows = event.hourWindows !== undefined || !!event.replaceHourWindows
+  if (hasWindows || hasHourWindows) {
+    let windows = null
+    if (hasWindows) {
+      const p = parseWindows(event.windows)
+      if (!p.ok) return { code: 400, message: p.error }
+      windows = p.windows
     }
+
+    let hourWindows = null
+    if (hasHourWindows) {
+      const rawMap = event.hourWindows && typeof event.hourWindows === 'object' ? event.hourWindows : {}
+      hourWindows = {}
+      for (const h of Object.keys(rawMap)) {
+        const hour = Number(h)
+        if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+          return { code: 400, message: '专属时段的小时必须为 0~23 的整数（收到：' + h + '）' }
+        }
+        const p = parseWindows(rawMap[h])
+        if (!p.ok) return { code: 400, message: hour + ' 点专属时段无效：' + p.error }
+        if (!p.windows.length) continue // 空 = 未配置该小时专属时段
+        hourWindows[String(hour)] = p.windows
+      }
+    }
+
+    // 在内存中先合并出最终配置，再统一做冲突校验（确保校验的是保存后的结果）
+    const nextCfg = Object.assign({}, cfg)
+    if (windows !== null) nextCfg.windows = windows
+    if (hourWindows !== null) nextCfg.hourWindows = hourWindows
+
+    const c = findCrossConflict(acc, gardenId, nextCfg)
+    if (c.conflictName) {
+      return { code: 400, message: (c.conflictHour === null ? '' : c.conflictHour + ' 点') + '时段与本账号花园「' + c.conflictName + '」重叠，同一账号同一时间只能托管一个花园，请错开' }
+    }
+
+    cfg.windows = nextCfg.windows || []
+    cfg.hourWindows = nextCfg.hourWindows || {}
+    await saveConfigsWithReset()
+    console.log('[PPGarden] setGardenConfig 已写入, gardenId=', gardenId,
+      'windows=', JSON.stringify(cfg.windows),
+      'hourWindows=', JSON.stringify(cfg.hourWindows))
+
+    // 组装保存结果提示
+    const parts = []
+    if (windows !== null) {
+      parts.push(windows.length ? '每小时 ' + windowsText(windows) + ' 分' : '整体时段已清空（不参与定时托管）')
+    }
+    if (hourWindows !== null) {
+      const hours = Object.keys(hourWindows).map(Number).sort((a, b) => a - b)
+      parts.push(hours.length
+        ? '专属时段 ' + hours.map(h => h + '~' + (h + 1) + ' 点 ' + windowsText(hourWindows[String(h)]) + ' 分').join('；')
+        : '专属时段已清空（全部小时沿用每小时时段）')
+    }
+    return { code: 0, message: '花园「' + gardenName + '」已保存：' + parts.join('；') }
   }
 
   if (event.schedEnabled !== undefined) {
@@ -1160,10 +1844,9 @@ async function handleSetGardenConfig(event) {
     await db.collection(ACCOUNTS_COLL).doc(_id).update({
       data: { gardenConfigs: configs, updatedAt: db.serverDate() }
     })
-    const name = gardenNameOf(acc, gardenId) || '花园'
     return {
       code: 0,
-      message: '花园「' + name + '」定时托管已' + (cfg.schedEnabled ? '开启' : '关闭')
+      message: '花园「' + gardenName + '」定时托管已' + (cfg.schedEnabled ? '开启' : '关闭')
     }
   }
 
@@ -1196,7 +1879,9 @@ async function handleAutoAssignAll(event) {
   }
 
   // 已占用时段：本账号其它花园（本账号全部花园重新分配；各账号独立，跨账号不冲突）
-  const occupied = collectOccupied(acc, null)
+  // 注意：这里把「整体时段」与「各小时专属时段」一并纳入占用，
+  // 避免新分配的整体时段与已有 21~22 点等专属时段撞车
+  const occupied = collectOccupiedAll(acc, null)
 
   const configs = Object.assign({}, acc.gardenConfigs || {})
   const assigned = []
@@ -1208,8 +1893,12 @@ async function handleAutoAssignAll(event) {
     const cfg = Object.assign({ schedEnabled: true }, configs[g.id] || {})
     cfg.windows = w
     cfg.schedEnabled = true
+    cfg.hourWindows = cfg.hourWindows || {}
     configs[g.id] = cfg
-    assigned.push('「' + (g.name || g.id) + '」' + windowsText(w))
+    const special = Object.keys(cfg.hourWindows).map(Number).sort((a, b) => a - b)
+      .map(h => h + '~' + (h + 1) + ' 点 ' + windowsText(cfg.hourWindows[String(h)]))
+      .join('；')
+    assigned.push('「' + (g.name || g.id) + '」' + windowsText(w) + (special ? '（专属 ' + special + '）' : ''))
     for (const x of w) occupied.push({ start: x.start, stop: x.stop, ownerName: g.name || g.id })
   }
 
@@ -1446,6 +2135,14 @@ async function handleStatus(event) {
   try {
     const summary = await withSession(acc, c => ppHostingSummary(c))
 
+    // 钱包信息（剩余时长 effectiveMs 等），失败不影响状态主流程
+    let wallet = null
+    try {
+      wallet = await withSession(acc, c => ppWallet(c))
+    } catch (e) {
+      console.error('[PPGarden] 查询钱包失败（忽略）:', acc.username, e.message)
+    }
+
     // 花园名称映射：优先用缓存的 gardenList，没有则现场拉取
     let nameMap = {}
     if (Array.isArray(acc.gardenList) && acc.gardenList.length) {
@@ -1457,12 +2154,21 @@ async function handleStatus(event) {
       } catch (e) { /* ignore */ }
     }
 
-    const items = (summary.gardens || []).map(g => ({
-      gardenId: g.gardenId,
-      name: nameMap[g.gardenId] || ('花园' + String(g.gardenId).slice(0, 8)),
-      state: g.state,
-      stateText: (STATE_TEXT[g.state] || g.state) + (g.credentialExpired ? '(凭证过期)' : '')
-    }))
+    const items = (summary.gardens || []).map(g => {
+      const holdings = g.holdings || {}
+      // 元宝数量：holdings.diamond（网站返回的元宝持有量）
+      const diamond = typeof holdings.diamond === 'number' ? holdings.diamond : null
+      return {
+        gardenId: g.gardenId,
+        name: nameMap[g.gardenId] || ('花园' + String(g.gardenId).slice(0, 8)),
+        state: g.state,
+        stateText: (STATE_TEXT[g.state] || g.state) + (g.credentialExpired ? '(凭证过期)' : ''),
+        // 元宝 / 雇佣书
+        diamond,
+        diamondText: diamond === null ? '' : String(diamond),
+        hireBook: typeof holdings.hireBook === 'number' ? holdings.hireBook : null
+      }
+    })
 
     const counts = summary.counts || {}
     const countParts = []
@@ -1475,7 +2181,20 @@ async function handleStatus(event) {
     if (counts.blocked) countParts.push('受阻 ' + counts.blocked)
     const summaryText = '共 ' + (summary.total || items.length) + ' 个花园' + (countParts.length ? '：' + countParts.join('，') : '')
 
-    // 更新缓存（含逐花园状态，供管理页直接展示）
+    // 钱包：剩余时长（毫秒）等
+    const walletInfo = wallet ? {
+      effectiveMs: typeof wallet.effectiveMs === 'number' ? wallet.effectiveMs : null,
+      paidMs: typeof wallet.paidMs === 'number' ? wallet.paidMs : null,
+      pendingMs: typeof wallet.pendingMs === 'number' ? wallet.pendingMs : null,
+      lockedMs: typeof wallet.lockedMs === 'number' ? wallet.lockedMs : null,
+      display: wallet.display || '',
+      runningGardens: typeof wallet.runningGardens === 'number' ? wallet.runningGardens : null,
+      maxConcurrent: typeof wallet.maxConcurrent === 'number' ? wallet.maxConcurrent : null,
+      hasHostingPlan: !!wallet.hasHostingPlan,
+      serverTime: typeof wallet.serverTime === 'number' ? wallet.serverTime : null
+    } : null
+
+    // 更新缓存（含逐花园状态 + 钱包信息，供管理页直接展示）
     await db.collection(ACCOUNTS_COLL).doc(_id).update({
       data: {
         hostingCache: {
@@ -1483,6 +2202,7 @@ async function handleStatus(event) {
           summaryText,
           counts,
           states: items,
+          wallet: walletInfo,
           updatedAt: db.serverDate()
         }
       }
@@ -1495,6 +2215,7 @@ async function handleStatus(event) {
         total: summary.total || items.length,
         summaryText,
         gardens: items,
+        wallet: walletInfo,
         serverTime: summary.serverTime || null
       }
     }
@@ -1734,6 +2455,437 @@ async function handleGardenActivity(event) {
   }
 }
 
+// 某账号的交易记录（卖花列表）：GET /api/orders?role=sell
+// 按花园拆分：一条订单的 legs 里可能包含多个花园（sellerGardenId），各自单独成行；
+// 花朵名称由 flowerId 经 ppgarden_status 的花朵映射解析。
+async function handleGardenTrades(event) {
+  const _id = event._id
+  if (!_id) return { code: 400, message: '缺少 _id' }
+
+  let acc
+  try {
+    const res = await db.collection(ACCOUNTS_COLL).doc(_id).get()
+    acc = res.data
+  } catch (e) {
+    return { code: 404, message: '账号不存在' }
+  }
+  if (!acc) return { code: 404, message: '账号不存在' }
+
+  try {
+    const limit = Math.min(Math.max(Number(event.limit) || 50, 1), 200)
+    const role = event.role === 'buy' ? 'buy' : 'sell'
+    const orders = await withSession(acc, c => ppOrders(c, role))
+    const nameMap = await getFlowerNameMap()
+
+    // 花园名称映射，便于按花园分组展示
+    const gardenNameMap = {}
+    for (const g of (acc.gardenList || [])) gardenNameMap[g.id] = g.name
+
+    const QUALITY_TEXT = { 1: '普品', 2: '优品', 3: '珍品', 4: '极品' }
+    // 诊断：列出订单里出现的花 id 及是否命中映射
+    const idHits = {}
+    for (const o of (orders || [])) {
+      if (!o || o.flowerId == null) continue
+      idHits[String(o.flowerId)] = nameMap[String(o.flowerId)] || null
+    }
+    console.log('[PPGarden] 交易花 id 命中情况:', JSON.stringify(idHits))
+    if (orders && orders[0]) {
+      console.log('[PPGarden] 交易订单样本(第一条):', JSON.stringify(orders[0]).slice(0, 800))
+    }
+
+    const items = []
+    for (const o of orders) {
+      if (!o) continue
+      const flowerName = nameMap[String(o.flowerId)] || ('花朵 ' + o.flowerId)
+      // 一条订单可能由多个花园各自卖出（legs），逐 leg 展开成独立记录
+      const legs = Array.isArray(o.legs) && o.legs.length ? o.legs : [null]
+      for (const leg of legs) {
+        const gardenId = (leg && leg.sellerGardenId) || o.buyerGardenId || ''
+        const groups = leg && leg.groups != null ? leg.groups : o.groups
+        // 「得 N 分钟」= 单组卖家所得 × 组数（sellerGetsPerGroup 单位为分钟）
+        const getsPerGroup = (leg && leg.sellerGetsPerGroup != null) ? leg.sellerGetsPerGroup : null
+        const gainMinutes = getsPerGroup != null ? getsPerGroup * groups : null
+        const status = (leg && leg.status) || o.status
+        items.push({
+          id: String(o.id) + (leg ? '_' + leg.id : ''),
+          orderId: o.orderId,
+          role: o.role || role,
+          flowerId: o.flowerId,
+          flowerName,
+          quality: o.quality,
+          qualityText: QUALITY_TEXT[o.quality] || (o.quality ? ('品质 ' + o.quality) : ''),
+          groups,
+          pricePerGroup: o.pricePerGroup,
+          feePerGroup: o.feePerGroup,
+          getsPerGroup,
+          gainMinutes,
+          gainText: gainMinutes == null ? '' : ('得 ' + gainMinutes + ' 分钟'),
+          status,
+          statusText: status === 'settled' ? '已完成' : (status || ''),
+          settled: status === 'settled',
+          across: (leg && leg.sellerName) || o.buyerName || '',
+          acrossLabel: role === 'sell' ? '买家' : '卖家',
+          gardenId,
+          gardenName: gardenNameMap[gardenId] || '',
+          createdAt: o.createdAt ? fmtCstMs(o.createdAt) : '',
+          settledAt: (function () {
+            const t = (leg && leg.settledAt) || o.settledAt
+            return t ? fmtCstMs(t) : ''
+          })()
+        })
+      }
+    }
+
+    // 按创建时间倒序，取前 limit 条
+    items.sort((a, b) => (b.orderId || 0) - (a.orderId || 0))
+    const sliced = items.slice(0, limit)
+
+    // 汇总：单数（去重 orderId）、总组数、总时长（分钟）
+    const orderIdSet = {}
+    let totalGroups = 0
+    let totalMinutes = 0
+    for (const it of items) {
+      orderIdSet[it.orderId] = true
+      totalGroups += Number(it.groups) || 0
+      totalMinutes += Number(it.gainMinutes) || 0
+    }
+    const summary = {
+      orders: Object.keys(orderIdSet).length,
+      groups: totalGroups,
+      minutes: totalMinutes,
+      minutesText: formatMinutes(totalMinutes)
+    }
+
+    return { code: 0, message: 'success', data: { items: sliced, summary, role } }
+  } catch (err) {
+    console.error('[PPGarden] 查询交易记录失败:', err.message)
+    return { code: 500, message: err.message || '查询交易记录失败' }
+  }
+}
+
+// 分钟数 → 中文文本（如 370 → '6 小时 10 分钟'）
+function formatMinutes(minutes) {
+  const m = Math.max(0, Math.round(Number(minutes) || 0))
+  const h = Math.floor(m / 60)
+  const mm = m % 60
+  if (h && mm) return h + ' 小时 ' + mm + ' 分钟'
+  if (h) return h + ' 小时'
+  return mm + ' 分钟'
+}
+
+// ==================== 求购列表 ====================
+// 仅拉取求购大厅列表并展示（不查询各花园库存，接单流程待网页确认后再实现）
+async function handleTradeRequests(event) {
+  const _id = event._id
+  if (!_id) return { code: 400, message: '缺少 _id' }
+
+  let acc
+  try {
+    const res = await db.collection(ACCOUNTS_COLL).doc(_id).get()
+    acc = res.data
+  } catch (e) {
+    return { code: 404, message: '账号不存在' }
+  }
+  if (!acc) return { code: 404, message: '账号不存在' }
+
+  try {
+    // 默认返回全部求购；仅在显式传入 limit（>0）时才截断
+    const n = Number(event.limit)
+    const limit = (Number.isFinite(n) && n > 0) ? Math.min(n, 500) : 0
+
+    const raw = await withSession(acc, c => ppTradeRequests(c))
+    const nameMap = await getFlowerNameMap()
+
+    const QUALITY_TEXT = { 1: '普品', 2: '优品', 3: '珍品', 4: '极品' }
+    // 求购状态文案（open 为进行中；其余状态原样透出，便于排查）
+    const STATUS_TEXT = { open: '进行中', filled: '已成交', cancelled: '已取消', expired: '已过期', closed: '已关闭' }
+    const items = raw.map(o => {
+      const totalGroups = o.totalGroups != null ? o.totalGroups : o.groups
+      const takenGroups = o.takenGroups != null ? o.takenGroups : 0
+      const remainingGroups = o.remainingGroups != null
+        ? o.remainingGroups
+        : (totalGroups != null && takenGroups != null ? Math.max(0, totalGroups - takenGroups) : o.groups)
+      return {
+        requestId: o.requestId != null ? o.requestId : o.id,
+        orderId: o.orderId,
+        kind: o.kind || 'request',
+        channel: o.channel || '',
+        flowerId: o.flowerId,
+        flowerName: nameMap[String(o.flowerId)] || ('花朵 ' + o.flowerId),
+        quality: o.quality,
+        qualityText: QUALITY_TEXT[o.quality] || (o.quality ? ('品质 ' + o.quality) : ''),
+        groups: totalGroups,
+        totalGroups,
+        takenGroups,
+        remainingGroups,
+        pricePerGroup: o.pricePerGroup,
+        sellerGetsPerGroup: o.sellerGetsPerGroup != null ? o.sellerGetsPerGroup : null,
+        // 「得 N 分钟」= 单组卖家所得 × 剩余组数
+        gainText: o.sellerGetsPerGroup != null && remainingGroups != null
+          ? ('得 ' + (o.sellerGetsPerGroup * remainingGroups) + ' 分钟') : '',
+        autoMatch: !!o.autoMatch,
+        targetCount: o.targetCount != null ? o.targetCount : null,
+        maxPricePerGroup: o.maxPricePerGroup != null ? o.maxPricePerGroup : null,
+        buyerName: o.buyerName || '',
+        status: o.status || '',
+        statusText: STATUS_TEXT[o.status] || (o.status || '未知'),
+        mine: !!o.mine,
+        // 卖家是否可接单（部分接口会在顶层返回；legs 里也有同名字段）
+        sellerCancelable: o.sellerCancelable !== undefined ? !!o.sellerCancelable : null,
+        canSell: o.canSell !== undefined ? !!o.canSell : null,
+        sellable: o.sellable !== undefined ? !!o.sellable : null,
+        reasonCode: o.reasonCode || '',
+        reasonText: o.reasonText || '',
+        blockText: o.blockText || '',
+        // 买家侧状态：排队是否已满 / 买家是否正在操作 / 前方排队人数 / 预计等待分钟
+        buyerQueueFull: !!o.buyerQueueFull,
+        buyerPlaying: !!o.buyerPlaying,
+        queueAhead: o.queueAhead != null ? o.queueAhead : 0,
+        queueEtaMinutes: o.queueEtaMinutes != null ? o.queueEtaMinutes : 0,
+        // 展示用文案：这两个为 true 时无法交易
+        queueText: o.buyerQueueFull ? '对方排队已满' : (Number(o.queueAhead) > 0 ? ('前方 ' + Number(o.queueAhead) + ' 人排队') : ''),
+        playingText: o.buyerPlaying ? '对方游戏中' : '',
+        autoMatchText: o.autoMatch ? '自动成交' : '非自动成交',
+        pausedReason: o.pausedReason || '',
+        pausedText: o.pausedText || '',
+        // 站点直接返回的「各账号可卖腿」：每个花园的可卖组数（已扣除任务用花/上架次数等）
+        sellerLegs: Array.isArray(o.sellerLegs) ? o.sellerLegs
+          : (Array.isArray(o.sellers) ? o.sellers : []),
+        mode: o.mode || '',
+        createdAt: o.createdAt ? fmtCstMs(o.createdAt) : '',
+        deadlineAt: o.expiresAt ? fmtCstMs(o.expiresAt) : (o.deadlineAt ? fmtCstMs(o.deadlineAt) : '')
+      }
+    })
+
+    // 诊断：打印第一条求购的全部字段名，便于确认可接单判断应使用哪个字段
+    if (raw.length) {
+      console.log('[PPGarden] 求购字段样本:', JSON.stringify(raw[0]))
+    }
+
+    // 刷新并读取「当前账号」下各花园库存（写入 ppgarden_stock，并用于匹配求购）
+    let stock = { gardens: [], flowers: {}, byFlower: {}, gardenFlowerStock: {} }
+    if (event.withStock !== false) {
+      try {
+        stock = await refreshAccountStock(acc)
+      } catch (e) {
+        console.error('[PPGarden] 刷新库存失败（继续返回列表）:', e.message)
+      }
+      console.log('[PPGarden] 本账号花园库存:', JSON.stringify(stock.gardens.map(x => ({ g: x.gardenName, sell: x.sellableGroups }))))
+    }
+    const gardenList = Array.isArray(acc.gardenList) ? acc.gardenList : []
+    const gardenNameById = {}
+    for (const g of gardenList) gardenNameById[g.id] = g.name || g.id
+
+    // 把库存匹配到每条求购：每个花园单独一行（含库存为 0 的花园）
+    // 优先按 flowerId_quality 精确匹配，找不到再回退按 flowerId（同花不同品质）
+    console.log('[PPGarden][库存] 开始匹配求购, 求购条数:', items.length,
+      '花园数:', gardenList.length,
+      'gardenFlowerStock 中的 gardenId:', JSON.stringify(Object.keys(stock.gardenFlowerStock || {})))
+    let matchSampleLogged = 0
+    items.forEach(it => {
+      const fid = String(it.flowerId)
+      const key = fid + '_' + (it.quality || 0)
+      const gfs = stock.gardenFlowerStock || {}
+
+      // 站点在求购里直接给出的各账号可卖腿（最准确）：gardenId -> { groups, haveCount, ... }
+      const legById = {}
+      const legs = Array.isArray(it.sellerLegs) ? it.sellerLegs : []
+      for (const leg of legs) {
+        if (leg && leg.gardenId) legById[leg.gardenId] = leg
+      }
+      const hasLegs = Object.keys(legById).length > 0
+
+      it.gardenStockList = gardenList.map(g => {
+        const perFlower = gfs[g.id] || {}
+        let info = perFlower[key]
+        let matchedKey = info ? key : ''
+        if (!info) {
+          // 回退：该花园同 flowerId 的任意品质
+          const alt = Object.keys(perFlower).find(k => k.split('_')[0] === fid)
+          if (alt !== undefined) { info = perFlower[alt]; matchedKey = alt }
+        }
+        let qty = info ? (Number(info.count) || 0) : 0
+        const leg = legById[g.id]
+        let groups = 0
+        let blockText = ''
+        if (leg) {
+          // 优先用站点给的组数与数量
+          if (leg.haveCount != null) qty = Number(leg.haveCount) || 0
+          groups = Number(leg.groups) || 0
+          blockText = leg.blockText || ''
+        } else if (!hasLegs) {
+          // 兼容老接口（无 sellerLegs）：按 1 组 = 25 朵 估算
+          groups = Math.floor(qty / 25)
+        }
+        const fullName = g.name || g.id
+        // 短名称：取「s1828.柒柒」中 . 后面的部分，横向排列时更紧凑
+        const shortName = fullName.indexOf('.') >= 0
+          ? fullName.split('.').pop()
+          : fullName.slice(-4)
+        return {
+          gardenId: g.id,
+          gardenName: fullName,
+          shortName,
+          count: qty,
+          groups,
+          sellableGroups: leg ? (Number(leg.sellableGroups) || 0) : groups,
+          blockText,
+          enabled: info ? !!info.enabled : false,
+          matchedKey,
+          hasStock: qty > 0
+        }
+      })
+      // 诊断：前 5 条打印「求购 key vs 各花园该 key 是否存在」
+      if (matchSampleLogged < 5) {
+        matchSampleLogged++
+        const brief = it.gardenStockList.map(x =>
+          x.gardenName + '(cnt:' + x.count + ',groups:' + x.groups + ',key:' + (x.matchedKey || '-') + ')')
+        console.log('[PPGarden][库存] 匹配样本 求购' + matchSampleLogged,
+          'fl:', fid, 'q:', it.quality, '查找key:', key,
+          'sellerLegs:', legs.length,
+          '结果:', brief.join(' | '))
+      }
+      finalizeRequestItem(it)
+    })
+
+    // 「只看我能卖的」：用 sellable-stock 接口返回的可卖花朵集合过滤求购
+    let filtered = items
+    if (event.onlySellable) {
+      let sellableMap = null
+      try {
+        const list = await withSession(acc, c => ppSellableStock(c))
+        sellableMap = {}
+        for (const s of list) {
+          if (!s) continue
+          const key = String(s.flowerId) + '_' + (s.quality || 0)
+          sellableMap[key] = (sellableMap[key] || 0) + (Number(s.sellableGroups) || 0)
+        }
+        console.log('[PPGarden][筛选] sellable-stock 条目:', list.length,
+          '可卖key数:', Object.keys(sellableMap).length)
+      } catch (e) {
+        // 查询失败时不筛选，避免整列表变空
+        console.error('[PPGarden][筛选] 查询可卖库存失败（本次不筛选）:', e.message)
+        sellableMap = null
+      }
+      if (sellableMap) {
+        filtered = items.filter(it => {
+          const key = String(it.flowerId) + '_' + (it.quality || 0)
+          const n = sellableMap[key] || 0
+          it.sellableStockGroups = n
+          return n > 0
+        })
+        console.log('[PPGarden][筛选] 只看我能卖的:', items.length, '->', filtered.length)
+      }
+    }
+
+    // limit 为 0 表示不截断，返回全部
+    const outItems = limit > 0 ? filtered.slice(0, limit) : filtered
+
+    // 用 sell-quote 覆盖各花园的可卖组数（网页点「卖给他」时用的就是这个接口）。
+    // 仅在客户端首次加载时传 withQuote=true 才执行，避免定时刷新反复调用。
+    if (event.withQuote === true) {
+      try {
+        await attachSellQuotes(acc, outItems, 100)
+      } catch (e) {
+        console.error('[PPGarden][报价] 批量报价失败（保持原有组数）:', e.message)
+      }
+    }
+
+    console.log('[PPGarden][库存] 返回客户端 求购条数:', outItems.length,
+      '（接口共 ' + items.length + ' 条，筛选后 ' + filtered.length + ' 条）',
+      '有库存可接单条数:', outItems.filter(x => x.canAccept).length,
+      'gardenStock:', JSON.stringify((stock.gardens || []).map(x => ({ name: x.gardenName, count: x.stockCount, err: x.error || '' }))),
+      '第一条 gardenStockList:', JSON.stringify((outItems[0] && outItems[0].gardenStockList) || []))
+
+    return {
+      code: 0,
+      message: 'success',
+      data: {
+        items: outItems,
+        gardenStock: stock.gardens,
+        updatedAt: stock.updatedAt || null
+      }
+    }
+  } catch (err) {
+    console.error('[PPGarden] 查询求购列表失败:', err.message)
+    return { code: 500, message: err.message || '查询求购列表失败' }
+  }
+}
+
+// 接单：POST /api/trade/requests/{requestId}/accept
+// 入参：_id（账号）, requestId, groups, pricePerGroup, targetCount
+//      gardenId / gardenName（指定用哪个花园接单）
+async function handleAcceptRequest(event) {
+  const _id = event._id
+  const requestId = event.requestId
+  // 站点限制：单次接单最多 9 组
+  const MAX_GROUPS_PER_ACCEPT = 9
+  const groups = Math.min(Number(event.groups) || 0, MAX_GROUPS_PER_ACCEPT)
+  const pricePerGroup = Number(event.pricePerGroup)
+  const targetCount = Number(event.targetCount) || 0
+  const gardenId = event.gardenId || ''
+  const gardenName = event.gardenName || ''
+  if (!_id || requestId == null) return { code: 400, message: '缺少 _id 或 requestId' }
+  if (!groups || groups <= 0) return { code: 400, message: '缺少有效的卖出组数' }
+
+  let acc
+  try {
+    const res = await db.collection(ACCOUNTS_COLL).doc(_id).get()
+    acc = res.data
+  } catch (e) {
+    return { code: 404, message: '账号不存在' }
+  }
+  if (!acc) return { code: 404, message: '账号不存在' }
+
+  try {
+    // 以 sell-quote 的实时可卖组数为准（网页也是用它判断能卖几组）
+    let groupsFinal = groups
+    let sellableGroups = 0
+    try {
+      const quote = await withSession(acc, c => ppSellQuote(c, requestId))
+      const sellers = (quote && (quote.sellers || quote.sellerLegs)) || []
+      const leg = sellers.find(x => x && x.gardenId === gardenId)
+      if (leg) {
+        sellableGroups = Number(leg.groups)
+        if (!Number.isFinite(sellableGroups)) sellableGroups = Number(leg.sellableGroups) || 0
+        groupsFinal = Math.min(groups, sellableGroups, MAX_GROUPS_PER_ACCEPT)
+        console.log('[PPGarden] sell-quote 该花园可卖组数:', sellableGroups,
+          '本次下单组数:', groupsFinal, 'gardenId:', gardenId)
+      }
+    } catch (e) {
+      console.warn('[PPGarden] sell-quote 失败，沿用传入组数:', e.message)
+    }
+    if (groupsFinal <= 0) {
+      return { code: 400, message: '该花园当前可卖 0 组（库存/上架次数不足）' }
+    }
+
+    const json = await withSession(acc, c => ppAcceptRequest(c, requestId, groupsFinal, pricePerGroup, gardenId, targetCount))
+    // 站点返回 { orderId, groups, pricePerGroup }，记录真实订单号
+    const newOrderId = json && json.orderId != null ? json.orderId : null
+    console.log('[PPGarden] 接单成功，订单号:', newOrderId, '返回:', JSON.stringify(json).slice(0, 400))
+    const flowerName = event.flowerName || ''
+    const message = '接单成功：' + (flowerName ? flowerName + ' ' : '') + groupsFinal + ' 组 × ' + pricePerGroup + ' 分钟/组' +
+      (gardenName ? '（' + gardenName + '）' : '')
+    await saveLog({
+      accountId: acc._id,
+      username: acc.username,
+      remark: acc.remark || '',
+      gardenId,
+      gardenName,
+      action: 'sell',
+      trigger: 'manual',
+      success: true,
+      message,
+      detail: { requestId, orderId: newOrderId, groups: groupsFinal, sellableGroups, pricePerGroup, gardenId },
+      createdAt: db.serverDate()
+    })
+    return { code: 0, message, data: json }
+  } catch (err) {
+    console.error('[PPGarden] 接单失败:', err.message)
+    return { code: 500, message: err.message || '接单失败' }
+  }
+}
+
 // ==================== 入口 ====================
 exports.main = async (event, context) => {
   // ===== 定时触发器模式（每分钟唤醒，按花园时段调度） =====
@@ -1794,6 +2946,14 @@ exports.main = async (event, context) => {
         return await handleSiteActivity(event)
       case 'gardenActivity':
         return await handleGardenActivity(event)
+      case 'gardenTrades':
+        return await handleGardenTrades(event)
+      case 'tradeRequests':
+        return await handleTradeRequests(event)
+      case 'gardenStock':
+        return await handleGardenStock(event)
+      case 'acceptRequest':
+        return await handleAcceptRequest(event)
       case 'logs':
         return await handleLogs(event)
       case 'runSchedule': {

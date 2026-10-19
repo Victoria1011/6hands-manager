@@ -102,6 +102,65 @@
   gap: 12rpx;
 }
 
+/* ===== 卡片内动态日志（账号下方直接展示） ===== */
+.inline-logs {
+  margin-top: 12rpx;
+  background: #f7f8fa;
+  border-radius: 12rpx;
+  padding: 4rpx 20rpx;
+}
+
+/* 日志滚动区：固定高度，超出可滚动，避免卡片被撑高 */
+.inline-logs-scroll {
+  max-height: 300rpx;
+  width: 100%;
+}
+
+.log-item {
+  padding: 14rpx 0;
+  border-bottom: 1rpx solid #eef0f3;
+}
+
+.log-item:last-child {
+  border-bottom: none;
+}
+
+.log-line1 {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.log-time {
+  font-size: 22rpx;
+  color: #86909c;
+  font-family: monospace;
+}
+
+.log-line2 {
+  font-size: 24rpx;
+  color: #4e5969;
+  margin-top: 6rpx;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.logs-loading,
+.logs-empty,
+.logs-error {
+  font-size: 22rpx;
+  padding: 12rpx 0;
+}
+
+.logs-loading,
+.logs-empty {
+  color: #a8abb2;
+}
+
+.logs-error {
+  color: #fa5151;
+}
+
 .act-btn {
   margin: 0;
   font-size: 24rpx;

@@ -50,6 +50,22 @@ const LARGE_COLLECTIONS = [
   'story_audio_projects'
 ]
 
+// 单文档体积巨大的集合（logs / transactions 为长数组），
+// 排序时需要把文档整体读入排序内存（上限 32MB），单页过大极易触发
+// "Sort operation used more than the maximum 33554432 bytes of RAM"
+const HEAVY_DOC_COLLECTIONS = [
+  'tts_clone_design_logs',
+  'coin_transactions'
+]
+const HEAVY_DOC_PAGE_SIZE = 20
+
+// 是否属于「排序内存超限」错误
+function isSortMemoryError(err) {
+  const msg = String((err && (err.errMsg || err.message)) || '')
+  if (/Sort operation used more than the maximum/i.test(msg)) return true
+  return /sort/i.test(msg) && /\bRAM\b/i.test(msg)
+}
+
 /**
  * 查询数据
  * @param {string} collection - 集合名称
@@ -68,23 +84,30 @@ async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderB
 
   // 对于大数据量集合，如果没有时间筛选，默认限制100条；有时间筛选时限制200条避免超时
   const isLargeCollection = LARGE_COLLECTIONS.includes(collection)
-  const effectivePageSize = Math.min(pageSize, isLargeCollection ? (timeRange ? 200 : 100) : 100)
+  // 超大文档集合进一步收窄单页容量：排序内存上限 32MB，页容量 × 单文档体积不能超限
+  const baseLimit = isLargeCollection ? (timeRange ? 200 : 100) : 100
+  const effectivePageSize = Math.min(
+    pageSize,
+    HEAVY_DOC_COLLECTIONS.includes(collection) ? HEAVY_DOC_PAGE_SIZE : baseLimit
+  )
+
+  // 排序字段（缺省按 _id 降序，_id 自带索引，不占排序内存）
+  let sort = (orderBy && orderBy.field) ? orderBy : { field: '_id', order: 'desc' }
+  let sortFallback = false
 
   try {
     // 构建查询条件（统一在查询后做服务端过滤，避免 where 条件格式不兼容）
     let queryWhere = { ...where }
 
-    // 构建查询
-    let query = db.collection(collection)
-    if (queryWhere && Object.keys(queryWhere).length > 0) {
-      query = query.where(queryWhere)
-    }
-
     // 获取总数（对于大数据量集合且有时间筛选时）
     let total = 0
     if (isLargeCollection && timeRange) {
       // 先获取总数（限制最大1000条避免性能问题）
-      const countResult = await query.count()
+      let countQuery = db.collection(collection)
+      if (queryWhere && Object.keys(queryWhere).length > 0) {
+        countQuery = countQuery.where(queryWhere)
+      }
+      const countResult = await countQuery.count()
       total = Math.min(countResult.total, 1000)
     } else {
       // 对于非大数据量集合或无时间筛选，直接使用限制后的条数
@@ -92,11 +115,30 @@ async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderB
     }
 
     // 分页查询
-    const listResult = await query
-      .orderBy(orderBy.field, orderBy.order)
-      .skip(pageIndex * effectivePageSize)
-      .limit(effectivePageSize)
-      .get()
+    const fetchList = async (order) => {
+      let q = db.collection(collection)
+      if (queryWhere && Object.keys(queryWhere).length > 0) {
+        q = q.where(queryWhere)
+      }
+      return q
+        .orderBy(order.field, order.order)
+        .skip(pageIndex * effectivePageSize)
+        .limit(effectivePageSize)
+        .get()
+    }
+
+    let listResult
+    try {
+      listResult = await fetchList(sort)
+    } catch (err) {
+      // 非索引字段排序时，MongoDB 需在内存中排序（上限 32MB），文档体积大即失败。
+      // 降级为按自带索引的 _id 排序，保证查询可用（外部展示排序由前端完成）。
+      if (!isSortMemoryError(err) || sort.field === '_id') throw err
+      console.warn('[ManagerDatabase] 排序内存超限，降级为按 _id 排序:', err.errMsg || err.message)
+      sortFallback = true
+      sort = { field: '_id', order: sort.order === 'asc' ? 'asc' : 'desc' }
+      listResult = await fetchList(sort)
+    }
 
     // 对大数据量集合做服务端时间过滤，减少返回数据量
     let resultList = listResult.data
@@ -153,7 +195,9 @@ async function queryData(collection, where, pageIndex = 0, pageSize = 20, orderB
         pageIndex: pageIndex,
         pageSize: effectivePageSize,
         hasMore: listResult.data.length === effectivePageSize,
-        limited: isLargeCollection && !timeRange
+        limited: isLargeCollection && !timeRange,
+        orderBy: sort,
+        sortFallback: sortFallback
       }
     }
   } catch (err) {

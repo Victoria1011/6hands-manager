@@ -38,7 +38,15 @@
         <text class="reload-gardens" data-index="{{index}}" catchtap="onReloadGardens">{{item.gardensLoading ? '花园刷新中...' : '从网站刷新花园'}}</text>
       </view>
 
-      <view class="account-sub">{{item.username}}</view>
+      <view class="account-sub">
+        <text>{{item.username}}</text>
+        <text class="diamond-badge" wx:if="{{item.hasDiamondTotal}}">💎 元宝 {{item.diamondTotalText}}</text>
+        <text class="remain-badge" wx:if="{{item.hasRemain}}">⏱ 剩余 {{item.remainText}}</text>
+        <text class="trade-link" data-index="{{index}}" data-id="{{item._id}}" data-tab="orders"
+              catchtap="onOpenTrades">交易记录 ›</text>
+        <text class="trade-link trade-link-requests" data-index="{{index}}" data-id="{{item._id}}" data-tab="requests"
+              catchtap="onOpenTrades">求购大厅 ›</text>
+      </view>
 
       <!-- 花园托管配置（每个花园独立：定时开关 / 每小时时段 / 手动启停） -->
       <view class="garden-picker">
@@ -59,9 +67,13 @@
               <view class="garden-row-name">
                 {{gr.name}}
                 <text class="garden-channel" wx:if="{{gr.channelText}}">{{gr.channelText}}</text>
+                <text class="diamond-badge" wx:if="{{gr.hasDiamond}}">💎 {{gr.diamondText}}</text>
               </view>
               <view class="garden-row-windows {{gr.hasWindows ? '' : 'win-empty'}}">
                 定时：{{gr.hasWindows ? '每小时 ' + gr.windowsText + ' 分' : '未设置时段'}}
+              </view>
+              <view class="garden-row-windows special {{gr.hasSpecial ? '' : 'win-empty'}}" wx:if="{{gr.hasSpecial}}">
+                专属：{{gr.specialText}}
               </view>
             </view>
             <text class="garden-state-badge {{gr.canStart === false ? 'on' : 'off'}}" wx:if="{{gr.stateText}}">{{gr.stateText}}</text>
@@ -76,11 +88,34 @@
                     data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
                     bindtap="onGardenPause" loading="{{gr.busyPause}}" disabled="{{gr.busyStart || gr.busyPause || !gr.canPause}}">暂停</button>
             <button size="mini" class="act-btn act-log"
-                    data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}" data-name="{{gr.name}}"
-                    bindtap="onGardenLogs">日志</button>
+                    data-index="{{index}}" data-ri="{{ri}}" data-id="{{item._id}}" data-garden-id="{{gr.gardenId}}"
+                    bindtap="onRefreshGardenLogs" loading="{{gr.logsLoading}}">日志</button>
             <button size="mini" class="act-btn"
                     data-index="{{index}}" data-ri="{{ri}}"
                     bindtap="onEditGardenWindows">{{gardenEditor.key === index + '_' + ri ? '收起' : '定时'}}</button>
+          </view>
+
+          <!-- 花园动态日志（行内直接展示，无需弹窗） -->
+          <view class="garden-inline-logs" wx:if="{{gr.stateText && gr.canStart === false || gr.logs}}">
+            <view class="inline-logs-head"
+                  data-index="{{index}}" data-ri="{{ri}}" catchtap="onToggleGardenLogs">
+              <text class="inline-logs-title">动态</text>
+              <text class="inline-logs-hint" wx:if="{{gr.canStart === false}}">托管中 · 自动刷新</text>
+              <text class="inline-logs-toggle">{{gr.logsCollapsed ? '展开' : '收起'}}</text>
+            </view>
+            <block wx:if="{{!gr.logsCollapsed}}">
+              <view class="logs-loading" wx:if="{{gr.logsLoading && !gr.logs}}">加载中...</view>
+              <view class="inline-logs-error" wx:elif="{{gr.logsError}}">{{gr.logsError}}</view>
+              <scroll-view wx:else scroll-y class="inline-logs-scroll" enhanced show-scrollbar="{{false}}">
+                <view class="log-item" wx:for="{{gr.logs}}" wx:for-item="lg" wx:key="id">
+                  <view class="log-line1">
+                    <text class="log-time">{{lg.timeText}}</text>
+                  </view>
+                  <view class="log-line2">{{lg.text}}</view>
+                </view>
+                <view class="status-empty" wx:if="{{!gr.logs.length}}">暂无动态</view>
+              </scroll-view>
+            </block>
           </view>
 
           <!-- 花园时段编辑器 -->
@@ -97,6 +132,24 @@
               <text class="window-remove" data-wi="{{wi}}" catchtap="onEditorRemove">✕</text>
             </view>
             <view class="window-add" bindtap="onEditorAdd" wx:if="{{gardenEditor.windows.length < 6}}">＋ 添加时段</view>
+
+            <!-- 专属时段（默认 21~22 点）：单独设置后，该小时使用此处的时段，其余小时仍用上面的整体时段 -->
+            <view class="editor-sub-tip" wx:for="{{gardenEditor.specials}}" wx:for-item="sp" wx:for-index="si" wx:key="hour">
+              <text>{{sp.label}}专属时段（不设置则沿用整体时段）</text>
+              <view class="window-row" wx:for="{{sp.list}}" wx:for-item="w" wx:for-index="wi" wx:key="wi">
+                <text class="window-index special">专属{{wi + 1}}</text>
+                <input class="minute-input" type="number" maxlength="2" value="{{w.start}}"
+                       data-si="{{si}}" data-wi="{{wi}}" data-field="start" bindinput="onEditorSpecialInput" placeholder="00"/>
+                <text class="window-sep">分 至</text>
+                <input class="minute-input" type="number" maxlength="2" value="{{w.stop}}"
+                       data-si="{{si}}" data-wi="{{wi}}" data-field="stop" bindinput="onEditorSpecialInput" placeholder="00"/>
+                <text class="window-sep">分</text>
+                <text class="window-remove" data-si="{{si}}" data-wi="{{wi}}" catchtap="onEditorSpecialRemove">✕</text>
+              </view>
+              <view class="window-add special" data-si="{{si}}" bindtap="onEditorSpecialAdd" wx:if="{{sp.list.length < 6}}">＋ 添加专属时段</view>
+              <view class="window-add special" data-si="{{si}}" bindtap="onEditorSpecialClear" wx:if="{{sp.list.length > 0}}">清除专属时段（沿用整体时段）</view>
+            </view>
+
             <view class="editor-actions">
               <button size="mini" class="act-btn" bindtap="onCancelGardenEditor">取消</button>
               <button size="mini" class="act-btn act-save-gardens" loading="{{savingGardenWindows}}" bindtap="onSaveGardenWindows">保存时段</button>
@@ -189,28 +242,145 @@
     </view>
   </view>
 
-  <!-- 花园动态日志弹层（底部弹窗） -->
-  <view class="form-mask" wx:if="{{logSheet.visible}}" bindtap="onCloseGardenLogs">
-    <view class="form-panel" catchtap="noop">
-      <view class="form-title">「{{logSheet.gardenName}}」动态日志</view>
-      <view class="sheet-auto {{logSheet.refreshing ? 'refreshing' : ''}}" wx:if="{{logSheet.auto && !logSheet.loading}}">
-        {{logSheet.refreshing ? '刷新中...' : '正在托管中 · 每 2 秒自动刷新'}}
+  <!-- 花园动态日志已在花园行内直接展示（见上方 garden-inline-logs），此处不再使用弹窗 -->
+
+  <!-- 交易弹层 -->
+  <view class="form-mask" wx:if="{{tradeSheet.visible}}" bindtap="onCloseTrades">
+    <view class="form-panel trade-panel" catchtap="noop">
+      <view class="trade-head">
+        <view class="form-title trade-title">交易 · {{tradeSheet.accountName}}</view>
+        <text class="trade-close" catchtap="onCloseTrades">✕</text>
       </view>
-      <scroll-view scroll-y class="log-scroll" enhanced show-scrollbar="{{false}}">
-        <view class="logs-loading" wx:if="{{logSheet.loading}}">加载中...</view>
-        <block wx:if="{{!logSheet.loading}}">
-          <view class="log-item" wx:for="{{logSheet.items}}" wx:key="id">
-            <view class="log-line1">
-              <text class="log-time">{{item.timeText}}</text>
-            </view>
-            <view class="log-line2">{{item.text}}</view>
+
+      <!-- 子标签：交易记录 / 求购大厅 -->
+      <view class="trade-tabs">
+        <view class="trade-tab {{tradeSheet.tab === 'orders' ? 'active' : ''}}"
+              data-tab="orders" catchtap="onSwitchTradeTab">交易记录</view>
+        <view class="trade-tab {{tradeSheet.tab === 'requests' ? 'active' : ''}}"
+              data-tab="requests" catchtap="onSwitchTradeTab">求购大厅</view>
+      </view>
+
+      <!-- ===== 交易记录 ===== -->
+      <block wx:if="{{tradeSheet.tab === 'orders'}}">
+        <view class="trade-summary" wx:if="{{!tradeSheet.loading && !tradeSheet.error}}">
+          <text>卖出 {{tradeSheet.summary.orders}} 单 · 卖掉 {{tradeSheet.summary.groups}} 组 · 得 {{tradeSheet.summary.minutesText}}</text>
+          <text class="trade-refresh {{tradeSheet.refreshing ? 'busy' : ''}}"
+                catchtap="onManualRefreshTrades">{{tradeSheet.refreshing ? '刷新中...' : (tradeSheet.updatedAtText ? '点击刷新 · ' + tradeSheet.updatedAtText : '点击刷新')}}</text>
+        </view>
+
+        <!-- 今日售卖：各花园今日卖出组数 / 获得时长 -->
+        <view class="today-overview" wx:if="{{tradeSheet.todayGardens.length}}">
+          <view class="today-head">
+            <text class="today-title">今日售卖</text>
+            <text class="today-total">共 {{tradeSheet.todayTotal.groups}} 组 · 得 {{tradeSheet.todayTotal.minutesText}}</text>
           </view>
-          <view class="status-empty" wx:if="{{!logSheet.items.length}}">暂无动态</view>
-        </block>
-      </scroll-view>
-      <view class="form-actions">
-        <button class="form-btn cancel" bindtap="onCloseGardenLogs">关闭</button>
-      </view>
+          <view class="today-row">
+            <text class="today-item {{g.hasSold ? 'on' : 'zero'}}"
+                  wx:for="{{tradeSheet.todayGardens}}" wx:for-item="g" wx:key="gardenId">
+              {{g.gardenName}} {{g.groups}}组 · {{g.minutesText}}
+            </text>
+          </view>
+        </view>
+
+        <scroll-view scroll-y class="trade-scroll" enhanced show-scrollbar="{{false}}">
+          <view class="logs-loading" wx:if="{{tradeSheet.loading}}">加载中...</view>
+          <view class="inline-logs-error" wx:elif="{{tradeSheet.error}}">{{tradeSheet.error}}</view>
+          <block wx:else>
+            <view class="trade-item" wx:for="{{tradeSheet.items}}" wx:key="id">
+              <view class="trade-line1">
+                <text class="trade-flower">{{item.flowerName}}</text>
+                <text class="trade-quality" wx:if="{{item.qualityText}}">{{item.qualityText}}</text>
+                <text class="trade-gain" wx:if="{{item.gainText}}">{{item.gainText}}</text>
+              </view>
+              <view class="trade-line2">
+                {{item.groups}} 组 · {{item.pricePerGroup}} 分钟/组 · {{item.createdAt}}
+              </view>
+              <view class="trade-line3">
+                <text class="trade-status {{item.settled ? 'on' : ''}}">{{item.statusText}}</text>
+                <text class="trade-across" wx:if="{{item.across}}">{{item.acrossLabel}} {{item.across}}</text>
+                <text class="trade-garden" wx:if="{{item.gardenName}}">「{{item.gardenName}}」</text>
+              </view>
+            </view>
+            <view class="status-empty" wx:if="{{!tradeSheet.items.length}}">暂无交易记录</view>
+          </block>
+        </scroll-view>
+      </block>
+
+      <!-- ===== 求购大厅（可接单卖花） ===== -->
+      <block wx:else>
+        <view class="trade-summary" wx:if="{{!requestSheet.loading && !requestSheet.error}}">
+          <text>求购 {{requestSheet.items.length}} 条 · 可接 {{requestSheet.acceptableCount}} 条</text>
+          <text class="trade-refresh {{requestSheet.refreshing ? 'busy' : ''}}"
+                catchtap="onManualRefreshRequests">{{requestSheet.refreshing ? '刷新中...' : (requestSheet.updatedAtText ? '每 3 秒刷新 · ' + requestSheet.updatedAtText : '每 3 秒刷新')}}</text>
+        </view>
+
+        <!-- 筛选：只看我能卖的 -->
+        <view class="trade-filter">
+          <text class="filter-label">只看我能卖的</text>
+          <switch class="filter-switch" checked="{{requestSheet.onlySellable}}"
+                  color="#07c160" bindchange="onToggleOnlySellable" />
+        </view>
+
+        <!-- 各花园今日售卖 / 剩余可卖（单行精简：名称 已卖/剩） -->
+        <view class="garden-today" wx:if="{{requestSheet.stockGardens.length}}">
+          <text class="garden-today-title">今日卖/剩</text>
+          <text class="garden-today-item" wx:for="{{requestSheet.stockGardens}}" wx:for-item="gs" wx:key="gardenId">
+            <text class="garden-today-name">{{gs.shortName}}</text>
+            <text class="garden-today-sold">{{gs.soldGroups}}</text>
+            <text class="garden-today-sep">/</text>
+            <text class="garden-today-rest {{gs.restGroups > 0 ? 'on' : 'zero'}}">{{gs.restGroups}}</text>
+          </text>
+        </view>
+
+        <!-- 各花园库存概览（弹窗打开时刷新） -->
+        <view class="stock-overview" wx:if="{{requestSheet.stockError}}">
+          <view class="stock-error">{{requestSheet.stockError}}</view>
+        </view>
+
+        <scroll-view scroll-y class="trade-scroll" enhanced show-scrollbar="{{false}}">
+          <view class="logs-loading" wx:if="{{requestSheet.loading}}">加载中...</view>
+          <view class="inline-logs-error" wx:elif="{{requestSheet.error}}">{{requestSheet.error}}</view>
+          <block wx:else>
+            <view class="trade-item" wx:for="{{requestSheet.items}}" wx:for-index="qi" wx:key="requestId">
+              <view class="trade-line1">
+                <text class="trade-flower">{{item.flowerName}}</text>
+                <text class="trade-quality" wx:if="{{item.qualityText}}">{{item.qualityText}}</text>
+                <text class="trade-gain" wx:if="{{item.gainText}}">{{item.gainText}}</text>
+              </view>
+              <!-- 状态标记：status / autoMatch / 排队是否已满 / 买家是否游戏中 -->
+              <view class="trade-flags">
+                <text class="trade-flag {{item.status === 'open' ? 'ok' : 'off'}}">{{item.statusText}}</text>
+                <text class="trade-flag {{item.autoMatch ? 'ok' : ''}}">{{item.autoMatchText}}</text>
+                <text class="trade-flag warn" wx:if="{{item.queueText}}">{{item.queueText}}</text>
+                <text class="trade-flag warn" wx:if="{{item.playingText}}">{{item.playingText}}</text>
+              </view>
+              <view class="trade-line2">
+                补到 {{item.targetCount}} 朵 · 上限 {{item.maxPricePerGroup}} 分钟/组 · {{item.createdAt}}
+              </view>
+              <view class="trade-line3">
+                <text class="trade-status">{{item.pricePerGroup}} 分钟/组</text>
+                <text class="trade-across">剩 {{item.remainingGroups}}/{{item.totalGroups}} 组</text>
+                <text class="trade-garden" wx:if="{{item.deadlineAt}}">截止 {{item.deadlineAt}}</text>
+              </view>
+              <view class="trade-line4">
+                <text class="trade-quote {{item.canAccept ? 'ok' : 'off'}}">{{item.canAccept ? item.sellableText : (item.blockReason || '不可接单')}}</text>
+              </view>
+              <!-- 各花园库存：横向排列，可接单的账号下方出现接单按钮 -->
+              <view class="garden-stock-list" wx:if="{{item.gardenStockList.length}}">
+                <view class="garden-stock-col"
+                      wx:for="{{item.gardenStockList}}" wx:for-item="gs" wx:for-index="gi" wx:key="gardenId">
+                  <text class="garden-stock-name">{{gs.shortName}}</text>
+                  <text class="garden-stock-count {{gs.canAcceptGarden ? 'on' : 'zero'}}">{{gs.count}}朵·{{gs.groups}}组</text>
+                  <button size="mini" class="garden-accept"
+                          wx:if="{{gs.canAcceptGarden}}" data-index="{{qi}}" data-gindex="{{gi}}"
+                          bindtap="onAcceptGardenStock" loading="{{gs.accepting}}">接单</button>
+                </view>
+              </view>
+            </view>
+            <view class="status-empty" wx:if="{{!requestSheet.items.length}}">暂无求购</view>
+          </block>
+        </scroll-view>
+      </block>
     </view>
   </view>
 </view>

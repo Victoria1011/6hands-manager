@@ -19,7 +19,9 @@ App({
           // 资源方 AppID
           resourceAppid: 'wx126d0f048410f694',
           // 资源方环境 ID
-          resourceEnv: 'six-hands-9g9fuco71bc0d539'
+          resourceEnv: 'six-hands-9g9fuco71bc0d539',
+          // API 超时时间（默认 15s 太短：音色管理等全量拉取型云函数耗时较长，易误报失败）
+          timeout: 60000
         });
         console.log('[App] 云开发 ', this.globalData.cloud);
 

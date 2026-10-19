@@ -18,8 +18,7 @@ Page({
     hosting: [],  // 正在托管
     waiting: [],  // 其它状态（已就绪/等待定时/受阻）
     errors: [],
-    updatedAtText: '',
-    activity: []  // 网站「动态-最新动态」日志
+    updatedAtText: ''
   },
 
   onLoad() {
@@ -28,6 +27,16 @@ Page({
 
   onShow() {
     this.checkIsLoggedIn()
+    // 回到页面时恢复动态自动刷新
+    if (this.data.hosting.length) this.startLogTimer()
+  },
+
+  onHide() {
+    this.stopLogTimer()
+  },
+
+  onUnload() {
+    this.stopLogTimer()
   },
 
   checkIsLoggedIn() {
@@ -60,17 +69,24 @@ Page({
       return
     }
     this.setData({ loading: true })
-    this.loadActivity() // 并行拉取网站最新动态，失败不影响主列表
     try {
       const res = await this.callApi('hostingNow')
       if (res.code !== 0) throw new Error(res.message || '加载失败')
+      const hosting = ((res.data && res.data.hosting) || []).map(it => Object.assign({}, it, {
+        logs: null,
+        logsLoading: false,
+        logsError: ''
+      }))
       this.setData({
-        hosting: (res.data && res.data.hosting) || [],
+        hosting,
         waiting: (res.data && res.data.waiting) || [],
         errors: (res.data && res.data.errors) || [],
         updatedAtText: fmtShort(Date.now()),
         loading: false
       })
+      // 每个正在托管的花园：账号下方直接展示其动态日志（无需点击）
+      this.loadHostingLogs()
+      this.startLogTimer()
     } catch (err) {
       this.setData({ loading: false })
       console.error('[PpgardenHosting] 加载失败:', err)
@@ -78,20 +94,79 @@ Page({
     }
   },
 
-  onPullDownRefresh() {
-    this.load().then(() => wx.stopPullDownRefresh())
+  // 逐个花园拉取动态日志，写入对应卡片（hosting[i].logs）
+  async loadHostingLogs() {
+    const hosting = this.data.hosting
+    for (let i = 0; i < hosting.length; i++) {
+      await this.loadOneLog(i)
+    }
   },
 
-  // 网站「动态-最新动态」日志（云函数调 /api/activity 汇总各账号）
-  async loadActivity() {
+  async loadOneLog(i) {
+    const cur = this.data.hosting[i]
+    if (!cur || cur.logsLoading) return
+    this.setData({ ['hosting[' + i + '].logsLoading']: true })
     try {
-      const res = await this.callApi('siteActivity', { limit: 30 })
+      const res = await this.callApi('gardenActivity', {
+        _id: cur.accountId, gardenId: cur.gardenId, limit: 20
+      })
       if (res.code !== 0) throw new Error(res.message || '加载失败')
-      this.setData({ activity: (res.data && res.data.items) || [] })
+      // 防止等待期间列表刷新导致错位
+      const now = this.data.hosting[i]
+      if (!now || now.gardenId !== cur.gardenId) return
+      this.setData({
+        ['hosting[' + i + '].logs']: (res.data && res.data.items) || [],
+        ['hosting[' + i + '].logsLoading']: false,
+        ['hosting[' + i + '].logsError']: ''
+      })
     } catch (err) {
-      console.error('[PpgardenHosting] 加载网站动态失败:', err)
-      this.setData({ activity: [] })
+      const now = this.data.hosting[i]
+      if (!now || now.gardenId !== cur.gardenId) return
+      this.setData({
+        ['hosting[' + i + '].logsLoading']: false,
+        ['hosting[' + i + '].logsError']: err.message || '加载失败'
+      })
     }
+  },
+
+  // 每 5 秒增量补拉最新动态（合并去重，不打断已展示内容）
+  startLogTimer() {
+    if (this._logTimer) return
+    this._logTimer = setInterval(() => this.refreshLogs(), 5000)
+  },
+
+  stopLogTimer() {
+    if (this._logTimer) {
+      clearInterval(this._logTimer)
+      this._logTimer = null
+    }
+  },
+
+  async refreshLogs() {
+    const hosting = this.data.hosting
+    for (let i = 0; i < hosting.length; i++) {
+      const cur = this.data.hosting[i]
+      if (!cur || cur.logsLoading) continue
+      try {
+        const res = await this.callApi('gardenActivity', {
+          _id: cur.accountId, gardenId: cur.gardenId, limit: 10
+        })
+        if (res.code !== 0) continue
+        const fresh = (res.data && res.data.items) || []
+        const now = this.data.hosting[i]
+        if (!now || now.gardenId !== cur.gardenId) continue
+        const exist = {}
+        for (const it of (now.logs || [])) exist[it.id] = true
+        const add = fresh.filter(it => !exist[it.id])
+        if (add.length) {
+          this.setData({ ['hosting[' + i + '].logs']: add.concat(now.logs || []).slice(0, 20) })
+        }
+      } catch (e) { /* 静默，下一轮再取 */ }
+    }
+  },
+
+  onPullDownRefresh() {
+    this.load().then(() => wx.stopPullDownRefresh())
   },
 
   // 快捷暂停某个正在托管的花园

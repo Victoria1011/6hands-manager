@@ -370,6 +370,13 @@ Page({
       })
 
       if (res.result.code === 0) {
+        // 云函数排序内存超限时会降级为 _id 排序，记住该集合并沿用，避免每次都先失败再重试
+        if (res.result.data && res.result.data.sortFallback) {
+          this._sortFallback = this._sortFallback || {}
+          this._sortFallback[targetCollection] = true
+          console.warn('[DatabaseManage] 该集合排序降级为 _id:', targetCollection)
+        }
+
         // 获取时间范围用于过滤数组字段
         const range = this.getTimeRange()
         
@@ -689,6 +696,8 @@ Page({
             flatLogs.push({
               ...log,
               openid: item.openid, // 保留 openid 信息
+              // logs 中音色字段名有 voice 与 voice_id 两种，做兼容
+              voiceId: log.voice || log.voice_id || '',
               formattedTime: this.formatTime(log.created_at),
               _logId: log._id || (Date.now() + Math.random()) // 生成唯一 ID
             })
@@ -847,6 +856,11 @@ Page({
   // 获取排序字段
   getOrderByField() {
     const collection = this.data.currentCollection
+
+    // 云函数曾因「排序内存超限」降级过该集合，则后续请求直接按 _id 排序（自带索引）
+    if (this._sortFallback && this._sortFallback[collection]) {
+      return { field: '_id', order: 'desc' }
+    }
 
     // 特定集合使用特定字段排序
     if (collection === 'upload_file_logs') {

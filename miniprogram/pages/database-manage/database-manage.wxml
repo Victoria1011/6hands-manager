@@ -543,6 +543,10 @@
                 <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.language}}">{{item.language}}</text>
               </view>
             </block>
+            <view class="log-flat-row" wx:if="{{item.voiceId}}">
+              <text class="log-flat-label">voice_id:</text>
+              <text class="log-flat-value copy-text" bindtap="onCopyText" data-text="{{item.voiceId}}">{{item.voiceId}}</text>
+            </view>
             <view class="log-flat-row">
               <text class="log-flat-label">成本:</text>
               <text class="log-flat-value cost-value copy-text" bindtap="onCopyText" data-text="{{item.cost}}">{{item.cost || 0}}</text>

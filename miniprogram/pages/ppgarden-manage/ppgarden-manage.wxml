@@ -48,6 +48,56 @@
               catchtap="onOpenTrades">求购大厅 ›</text>
       </view>
 
+      <!-- 自动接单：默认只占一行，点「设置」展开配置 -->
+      <view class="auto-sell">
+        <view class="auto-sell-row">
+          <text class="auto-sell-title">自动接单</text>
+          <text class="auto-sell-tip">{{item.autoSellEnabled ? (item.autoSellMinPrice + ' 分钟/组 · 每' + item.autoSellIntervalMin + '分钟 · ' + item.autoSellStartTime + '-' + item.autoSellEndTime) : '已关闭'}}</text>
+          <text class="auto-sell-log-btn" data-index="{{index}}" catchtap="onOpenAutoSellLogs">日志</text>
+          <text class="auto-sell-log-btn auto-sell-set-btn" data-index="{{index}}"
+                catchtap="onToggleAutoSellPanel">{{item.autoSellExpanded ? '收起' : '设置'}}</text>
+          <switch class="auto-sell-switch" checked="{{item.autoSellEnabled}}" color="#07c160"
+                  data-index="{{index}}" data-id="{{item._id}}" bindchange="onToggleAutoSell"/>
+        </view>
+
+        <view class="auto-sell-panel" wx:if="{{item.autoSellExpanded}}">
+          <view class="auto-sell-price {{item.autoSellEnabled ? '' : 'is-off'}}">
+            <text class="auto-sell-price-label">最低价格</text>
+            <input class="auto-sell-input" type="digit" value="{{item.autoSellMinPrice}}"
+                   data-index="{{index}}" data-id="{{item._id}}"
+                   bindblur="onAutoSellPriceBlur" bindconfirm="onAutoSellPriceBlur"/>
+            <text class="auto-sell-price-unit">分钟/组</text>
+          </view>
+          <view class="auto-sell-price {{item.autoSellEnabled ? '' : 'is-off'}}">
+            <text class="auto-sell-price-label">接单时段</text>
+            <picker mode="time" value="{{item.autoSellStartTime || '01:30'}}"
+                    data-index="{{index}}" data-id="{{item._id}}" data-field="autoSellStartTime"
+                    bindchange="onAutoSellTimeChange">
+              <view class="auto-sell-time-value">{{item.autoSellStartTime || '01:30'}}</view>
+            </picker>
+            <text class="auto-sell-price-unit">至</text>
+            <picker mode="time" value="{{item.autoSellEndTime || '23:59'}}"
+                    data-index="{{index}}" data-id="{{item._id}}" data-field="autoSellEndTime"
+                    bindchange="onAutoSellTimeChange">
+              <view class="auto-sell-time-value">{{item.autoSellEndTime || '23:59'}}</view>
+            </picker>
+          </view>
+          <view class="auto-sell-price {{item.autoSellEnabled ? '' : 'is-off'}}">
+            <text class="auto-sell-price-label">检测间隔</text>
+            <input class="auto-sell-input" type="number" value="{{item.autoSellIntervalMin}}"
+                   data-index="{{index}}" data-id="{{item._id}}"
+                   bindblur="onAutoSellIntervalBlur" bindconfirm="onAutoSellIntervalBlur"/>
+            <text class="auto-sell-price-unit">分钟（1~1440）</text>
+          </view>
+          <view class="auto-sell-hint">
+            站点 00:00-01:30 无法接单；跨天时段可设如 21:00 至 08:00；同时只能有一笔进行中的交易，会自动等待
+          </view>
+          <view class="auto-sell-status" wx:if="{{item.autoSellStatus}}">
+            上次检查 {{item.autoSellStatus.timeText}} · {{item.autoSellStatus.text}}
+          </view>
+        </view>
+      </view>
+
       <!-- 花园托管配置（每个花园独立：定时开关 / 每小时时段 / 手动启停） -->
       <view class="garden-picker">
         <view class="garden-picker-head">
@@ -244,6 +294,44 @@
 
   <!-- 花园动态日志已在花园行内直接展示（见上方 garden-inline-logs），此处不再使用弹窗 -->
 
+  <!-- 自动接单日志弹层（该账号全部自动接单记录） -->
+  <view class="form-mask" wx:if="{{logSheet.visible}}" bindtap="onCloseAutoSellLogs">
+    <view class="form-panel log-panel" catchtap="noop">
+      <view class="trade-head">
+        <view class="form-title trade-title">自动接单日志 · {{logSheet.accountName}}</view>
+        <text class="trade-close" catchtap="onCloseAutoSellLogs">✕</text>
+      </view>
+
+      <view class="log-summary">
+        <text class="log-count">{{logSheet.loading && !logSheet.logs.length ? '加载中...' : '共 ' + logSheet.logs.length + ' 条'}}</text>
+        <view class="log-actions">
+          <text class="trade-refresh" catchtap="onRunAutoSellCheck">{{logSheet.running ? '检查中...' : '立即检查'}}</text>
+          <text class="trade-refresh" catchtap="onRefreshAutoSellLogs">{{logSheet.loading ? '刷新中...' : '刷新'}}</text>
+        </view>
+      </view>
+
+      <!-- 立即检查的诊断结果 -->
+      <view class="diag-box" wx:if="{{logSheet.steps.length}}">
+        <view class="diag-line" wx:for="{{logSheet.steps}}" wx:for-item="st" wx:key="index">{{st}}</view>
+      </view>
+
+      <view class="status-empty" wx:if="{{logSheet.loading && !logSheet.logs.length}}">加载中...</view>
+      <view class="status-empty error" wx:elif="{{logSheet.error}}">{{logSheet.error}}</view>
+      <view class="status-empty" wx:elif="{{!logSheet.logs.length}}">暂无自动接单记录（日志保留 14 天）</view>
+      <scroll-view wx:else scroll-y class="log-scroll" enhanced show-scrollbar="{{false}}">
+        <view class="auto-sell-log-item {{lg.success ? 'ok' : 'bad'}}"
+              wx:for="{{logSheet.logs}}" wx:for-item="lg" wx:key="id">
+          <view class="auto-sell-log-line1">
+            <text class="auto-sell-log-time">{{lg.timeText}}</text>
+            <text class="auto-sell-log-tag">{{lg.actionText}}</text>
+            <text class="auto-sell-log-trigger">{{lg.triggerText}}</text>
+          </view>
+          <view class="auto-sell-log-msg">{{lg.message}}</view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+
   <!-- 交易弹层 -->
   <view class="form-mask" wx:if="{{tradeSheet.visible}}" bindtap="onCloseTrades">
     <view class="form-panel trade-panel" catchtap="noop">
@@ -309,16 +397,25 @@
       <!-- ===== 求购大厅（可接单卖花） ===== -->
       <block wx:else>
         <view class="trade-summary" wx:if="{{!requestSheet.loading && !requestSheet.error}}">
-          <text>求购 {{requestSheet.items.length}} 条 · 可接 {{requestSheet.acceptableCount}} 条</text>
+          <text>求购 {{requestSheet.items.length}} 条 · 可接 {{requestSheet.acceptableCount}} 条 · 按{{requestSheet.sortGardenName}}库存排序</text>
           <text class="trade-refresh {{requestSheet.refreshing ? 'busy' : ''}}"
                 catchtap="onManualRefreshRequests">{{requestSheet.refreshing ? '刷新中...' : (requestSheet.updatedAtText ? '每 3 秒刷新 · ' + requestSheet.updatedAtText : '每 3 秒刷新')}}</text>
         </view>
 
-        <!-- 筛选：只看我能卖的 -->
+        <!-- 筛选：只看我能卖的 / 排序花园 -->
         <view class="trade-filter">
-          <text class="filter-label">只看我能卖的</text>
-          <switch class="filter-switch" checked="{{requestSheet.onlySellable}}"
-                  color="#07c160" bindchange="onToggleOnlySellable" />
+          <view class="filter-left">
+            <text class="filter-label">只看我能卖的</text>
+            <switch class="filter-switch" checked="{{requestSheet.onlySellable}}"
+                    color="#07c160" bindchange="onToggleOnlySellable" />
+          </view>
+          <view class="filter-right">
+            <text class="filter-label">排序花园</text>
+            <picker mode="selector" range="{{requestSheet.sortGardens}}" range-key="name"
+                    value="{{requestSheet.sortGardenIndex}}" bindchange="onSortGardenChange">
+              <view class="sort-garden-value">{{requestSheet.sortGardenName}} ▾</view>
+            </picker>
+          </view>
         </view>
 
         <!-- 各花园今日售卖 / 剩余可卖（单行精简：名称 已卖/剩） -->

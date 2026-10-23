@@ -161,7 +161,14 @@ Page({
     requestSheet: {
       loading: false, refreshing: false, error: '', updatedAtText: '', acceptableCount: 0, items: [],
       stockLoading: false, stockError: '', stockGardens: [], stockFlowers: [], stockUpdatedAt: '',
-      onlySellable: true // 默认只看我能卖的
+      onlySellable: true, // 默认只看我能卖的
+      // 排序花园：id 为空表示按账号总库存排序
+      sortGardens: [{ id: '', name: '全部花园' }], sortGardenIndex: 0, sortGardenId: '', sortGardenName: '全部花园'
+    },
+    // 自动接单日志弹层（该账号全部自动接单记录）
+    logSheet: {
+      visible: false, accountId: '', accountName: '', logs: [], loading: false, error: '',
+      steps: [], running: false
     },
   },
 
@@ -337,7 +344,22 @@ Page({
       diamondTotalText: diamondTotal ? String(diamondTotal) : '',
       hasDiamondTotal: Object.keys(diamondMap).length > 0,
       // 账号级「托管中」标记：任一花园在托即生效（卡片加高亮描边）
-      anyHosting: gardenRows.some(r => r.canStart === false)
+      anyHosting: gardenRows.some(r => r.canStart === false),
+      // 自动接单配置（兼容历史数据缺失字段）
+      autoSellExpanded: !!(this._autoSellOpen && this._autoSellOpen[a._id]), // 配置面板是否展开（仅前端状态）
+      autoSellEnabled: a.autoSellEnabled === true,
+      autoSellMinPrice: a.autoSellMinPrice != null ? Number(a.autoSellMinPrice) : 40,
+      // 检测间隔（分钟），默认 2
+      autoSellIntervalMin: a.autoSellIntervalMin != null ? Number(a.autoSellIntervalMin) : 2,
+      autoSellStartTime: a.autoSellStartTime || '01:30',
+      autoSellEndTime: a.autoSellEndTime || '23:59',
+      // 最近一次自动接单检查结果
+      autoSellStatus: a.autoSellStatus
+        ? {
+          text: a.autoSellStatus.text || '',
+          timeText: a.autoSellStatus.at ? fmtShort(a.autoSellStatus.at) : ''
+        }
+        : null
     })
   },
 
@@ -469,6 +491,198 @@ Page({
       wx.showToast({ title: err.message || '操作失败', icon: 'none' })
     } finally {
       this.setData({ masterSwitching: false })
+    }
+  },
+
+  // ===== 自动接单 =====
+  // 展开/收起自动接单配置（默认只占一行）
+  onToggleAutoSellPanel(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const acc = this.data.accounts[index]
+    if (!acc) return
+    const open = !acc.autoSellExpanded
+    if (!this._autoSellOpen) this._autoSellOpen = {}
+    if (open) this._autoSellOpen[acc._id] = true
+    else delete this._autoSellOpen[acc._id]
+    this.setData({ ['accounts[' + index + '].autoSellExpanded']: open })
+  },
+
+  async onToggleAutoSell(e) {
+    const index = e.currentTarget.dataset.index
+    const id = e.currentTarget.dataset.id
+    const enabled = !!e.detail.value
+    const acc = this.data.accounts[index]
+    // 开启时云端会先刷新花园库存校验可卖组数，耗时稍长
+    let loadingShown = false
+    if (enabled) {
+      wx.showLoading({ title: '校验库存中', mask: true })
+      loadingShown = true
+    }
+    const hideLoading = () => {
+      if (loadingShown) {
+        wx.hideLoading()
+        loadingShown = false
+      }
+    }
+    this.setData({ ['accounts[' + index + '].autoSellEnabled']: enabled })
+    try {
+      const res = await this.callApi('setAutoSell', { _id: id, enabled })
+      hideLoading()
+      if (res.code !== 0) throw new Error(res.message || '操作失败')
+      wx.showToast({ title: enabled ? '已开启自动接单' : '已关闭自动接单', icon: 'none' })
+    } catch (err) {
+      hideLoading()
+      this.setData({ ['accounts[' + index + '].autoSellEnabled']: acc ? !!acc.autoSellEnabled : !enabled })
+      const msg = err.message || '操作失败'
+      if (enabled) {
+        wx.showModal({ title: '无法开启自动接单', content: msg, showCancel: false })
+      } else {
+        wx.showToast({ title: msg, icon: 'none' })
+      }
+    }
+  },
+
+  async onAutoSellPriceBlur(e) {
+    const index = e.currentTarget.dataset.index
+    const id = e.currentTarget.dataset.id
+    const acc = this.data.accounts[index]
+    if (!acc) return
+    const v = Number(e.detail.value)
+    if (!Number.isFinite(v) || v <= 0) {
+      this.setData({ ['accounts[' + index + '].autoSellMinPrice']: acc.autoSellMinPrice || 40 })
+      wx.showToast({ title: '请输入大于 0 的数字', icon: 'none' })
+      return
+    }
+    if (v === Number(acc.autoSellMinPrice)) return
+    this.setData({ ['accounts[' + index + '].autoSellMinPrice']: v })
+    try {
+      const res = await this.callApi('setAutoSell', { _id: id, minPrice: v })
+      if (res.code !== 0) throw new Error(res.message || '操作失败')
+      wx.showToast({ title: '已保存', icon: 'none' })
+    } catch (err) {
+      this.setData({ ['accounts[' + index + '].autoSellMinPrice']: acc.autoSellMinPrice || 40 })
+      wx.showToast({ title: err.message || '保存失败', icon: 'none' })
+    }
+  },
+
+  // 检测间隔（分钟）：1 ~ 1440
+  async onAutoSellIntervalBlur(e) {
+    const index = e.currentTarget.dataset.index
+    const id = e.currentTarget.dataset.id
+    const acc = this.data.accounts[index]
+    if (!acc) return
+    const v = Math.round(Number(e.detail.value))
+    if (!Number.isFinite(v) || v < 1 || v > 1440) {
+      this.setData({ ['accounts[' + index + '].autoSellIntervalMin']: acc.autoSellIntervalMin || 2 })
+      wx.showToast({ title: '检测间隔应为 1~1440 分钟', icon: 'none' })
+      return
+    }
+    if (v === Number(acc.autoSellIntervalMin)) return
+    this.setData({ ['accounts[' + index + '].autoSellIntervalMin']: v })
+    try {
+      const res = await this.callApi('setAutoSell', { _id: id, intervalMin: v })
+      if (res.code !== 0) throw new Error(res.message || '操作失败')
+      wx.showToast({ title: '已保存', icon: 'none' })
+    } catch (err) {
+      this.setData({ ['accounts[' + index + '].autoSellIntervalMin']: acc.autoSellIntervalMin || 2 })
+      wx.showToast({ title: err.message || '保存失败', icon: 'none' })
+    }
+  },
+
+  // ===== 自动接单日志弹层 =====
+  async onOpenAutoSellLogs(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const acc = this.data.accounts[index]
+    if (!acc) return
+    this.setData({
+      logSheet: {
+        visible: true,
+        accountId: acc._id,
+        accountName: acc.remark || acc.username,
+        logs: [],
+        loading: true,
+        error: '',
+        steps: [],
+        running: false
+      }
+    })
+    await this.fetchAutoSellLogs(acc._id)
+  },
+
+  onCloseAutoSellLogs() {
+    this.setData({ 'logSheet.visible': false })
+  },
+
+  onRefreshAutoSellLogs() {
+    this.fetchAutoSellLogs(this.data.logSheet.accountId)
+  },
+
+  // 立即执行一次自动接单，并把每一步判定结果显示在弹窗里
+  async onRunAutoSellCheck() {
+    const accountId = this.data.logSheet.accountId
+    if (!accountId || this.data.logSheet.running) return
+    this.setData({ 'logSheet.running': true, 'logSheet.steps': ['检查中...'] })
+    try {
+      const res = await this.callApi('autoSellRun', { _id: accountId })
+      const steps = (res.data && res.data.steps) || []
+      this.setData({ 'logSheet.steps': steps.length ? steps : ['无诊断信息'] })
+      if (res.code !== 0) wx.showToast({ title: res.message || '执行失败', icon: 'none' })
+      await this.fetchAutoSellLogs(accountId)
+    } catch (err) {
+      this.setData({ 'logSheet.steps': ['检查失败：' + (err.message || '网络异常')] })
+    } finally {
+      this.setData({ 'logSheet.running': false })
+    }
+  },
+
+  // 一次取回该账号全部自动接单日志
+  async fetchAutoSellLogs(accountId) {
+    if (!accountId) return
+    this.setData({ 'logSheet.loading': true, 'logSheet.error': '' })
+    try {
+      const res = await this.callApi('accountLogs', { accountId, allAutoSell: true })
+      if (res.code !== 0) throw new Error(res.message || '加载失败')
+      this.setData({ 'logSheet.logs': (res.data && res.data.logs) || [] })
+    } catch (err) {
+      this.setData({ 'logSheet.error': err.message || '加载失败' })
+    } finally {
+      this.setData({ 'logSheet.loading': false })
+    }
+  },
+
+  // 更新账号某字段：整数组替换，确保 wx:for 内绑定的值一定刷新
+  setAccountField(index, field, value) {
+    const accounts = this.data.accounts.slice()
+    if (!accounts[index]) return
+    accounts[index] = Object.assign({}, accounts[index], { [field]: value })
+    this.setData({ accounts })
+  },
+
+  // 接单时段：时间选择器变更后立即保存
+  async onAutoSellTimeChange(e) {
+    const ds = e.currentTarget.dataset || {}
+    const field = ds.field
+    const id = ds.id
+    let index = ds.index
+    if (index === undefined || index === null || index === '') {
+      index = this.data.accounts.findIndex(a => a._id === id)
+    }
+    index = Number(index)
+    const acc = this.data.accounts[index]
+    const v = e.detail.value
+    console.log('[Ppgarden] 自动接单时段变更:', { index, field, value: v, old: acc && acc[field] })
+    if (!acc || !field) return
+    if (!v || v === acc[field]) return
+    const old = acc[field]
+    this.setAccountField(index, field, v)
+    const payload = field === 'autoSellStartTime' ? { startTime: v } : { endTime: v }
+    try {
+      const res = await this.callApi('setAutoSell', Object.assign({ _id: id || acc._id }, payload))
+      if (res.code !== 0) throw new Error(res.message || '保存失败')
+      wx.showToast({ title: '已保存', icon: 'none' })
+    } catch (err) {
+      this.setAccountField(index, field, old)
+      wx.showToast({ title: err.message || '保存失败', icon: 'none' })
     }
   },
 
@@ -1108,12 +1322,24 @@ Page({
           earnedText: formatMinutesText(earned)
         })
       })
+      // 排序花园选项：全部花园 + 各花园（保留当前选择）
+      const sortGardens = [{ id: '', name: '全部花园' }].concat(gardens.map(g => ({
+        id: g.gardenId,
+        name: g.shortName || g.gardenName || g.gardenId
+      })))
+      let sortIndex = sortGardens.findIndex(x => x.id === this.data.requestSheet.sortGardenId)
+      if (sortIndex < 0) sortIndex = 0
+
       this.setData({
         'requestSheet.stockLoading': false,
         'requestSheet.stockError': '',
         'requestSheet.stockGardens': gardens,
         'requestSheet.stockFlowers': (res.data && res.data.flowers) || [],
         'requestSheet.stockUpdatedAt': fmtShort(Date.now()),
+        'requestSheet.sortGardens': sortGardens,
+        'requestSheet.sortGardenIndex': sortIndex,
+        'requestSheet.sortGardenId': sortGardens[sortIndex].id,
+        'requestSheet.sortGardenName': sortGardens[sortIndex].name,
         // 交易记录 tab 的「今日售卖」汇总：各花园今日卖出组数 / 获得时长
         'tradeSheet.todayGardens': buildTodayGardens(gardens),
         'tradeSheet.todayTotal': sumToday(gardens)
@@ -1245,7 +1471,35 @@ Page({
         x.canAcceptGarden = !reason && (Number(x.groups) || 0) > 0
       })
     })
+    // 按所选花园（未选则按账号总库存）的可卖组数从多到少排序
+    return this.sortRequestItems(items)
+  },
+
+  // 求购列表排序：库存组数降序，库存相同按价格降序
+  sortRequestItems(items) {
+    const gid = this.data.requestSheet.sortGardenId
+    const stockOf = it => {
+      if (!gid) return Number(it.sellableGroups) || 0
+      const gs = (it.gardenStockList || []).find(x => x && x.gardenId === gid)
+      return gs ? (Number(gs.groups) || 0) : 0
+    }
+    items.sort((a, b) =>
+      (stockOf(b) - stockOf(a)) ||
+      ((Number(b.pricePerGroup) || 0) - (Number(a.pricePerGroup) || 0)))
     return items
+  },
+
+  // 切换排序花园：立即按该花园库存重排当前列表（无需重新请求）
+  onSortGardenChange(e) {
+    const i = Number(e.detail.value) || 0
+    const opt = this.data.requestSheet.sortGardens[i] || { id: '', name: '全部花园' }
+    this.setData({
+      'requestSheet.sortGardenIndex': i,
+      'requestSheet.sortGardenId': opt.id || '',
+      'requestSheet.sortGardenName': opt.name || '全部花园'
+    })
+    const items = this.sortRequestItems((this.data.requestSheet.items || []).slice())
+    this.setData({ 'requestSheet.items': items })
   },
 
   // 接单：用指定花园卖出（组数取站点给出的该花园可卖组数）

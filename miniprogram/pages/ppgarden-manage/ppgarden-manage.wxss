@@ -270,6 +270,282 @@
   color: #07c160;
 }
 
+/* ===== 自动接单配置 ===== */
+.auto-sell {
+  margin-top: 12rpx;
+  padding: 14rpx 16rpx;
+  background: #f7f8fa;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 10rpx;
+}
+
+.auto-sell-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.auto-sell-title {
+  font-size: 26rpx;
+  color: #1d2129;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* 标题旁「日志」按钮 */
+.auto-sell-log-btn {
+  flex-shrink: 0;
+  padding: 2rpx 12rpx;
+  font-size: 22rpx;
+  color: #1677ff;
+  background: #eef6ff;
+  border: 1rpx solid #b8d4ff;
+  border-radius: 6rpx;
+}
+
+.auto-sell-tip {
+  flex: 1;
+  min-width: 0;
+  font-size: 22rpx;
+  color: #86909c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 「设置/收起」按钮：比日志按钮更淡，避免抢眼 */
+.auto-sell-set-btn {
+  color: #4e5969;
+  background: #f2f3f5;
+  border-color: #e5e6eb;
+}
+
+/* 展开后的配置面板 */
+.auto-sell-panel {
+  margin-top: 10rpx;
+  padding-top: 10rpx;
+  border-top: 1rpx dashed #e5e6eb;
+}
+
+.auto-sell-switch {
+  transform: scale(0.8);
+  flex-shrink: 0;
+}
+
+.auto-sell-price {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: #4e5969;
+}
+
+.auto-sell-price-label {
+  flex-shrink: 0;
+}
+
+.auto-sell-input {
+  width: 130rpx;
+  height: 52rpx;
+  padding: 0 12rpx;
+  background: #fff;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 8rpx;
+  font-size: 24rpx;
+  text-align: center;
+}
+
+.auto-sell-price-unit {
+  flex-shrink: 0;
+  color: #86909c;
+}
+
+.auto-sell-time-value {
+  min-width: 110rpx;
+  height: 52rpx;
+  line-height: 52rpx;
+  padding: 0 12rpx;
+  background: #fff;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 8rpx;
+  font-size: 24rpx;
+  color: #1d2129;
+  text-align: center;
+}
+
+.auto-sell-hint {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #86909c;
+  line-height: 1.5;
+}
+
+.auto-sell-status {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #1677ff;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+/* 关闭状态下配置行淡化（仍可预先设置） */
+.auto-sell-price.is-off {
+  opacity: 0.55;
+}
+
+/* 自动接单执行日志 */
+.auto-sell-logs {
+  margin-top: 12rpx;
+  padding-top: 10rpx;
+  border-top: 1rpx dashed #e5e6eb;
+}
+
+.auto-sell-logs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.auto-sell-logs-title {
+  font-size: 24rpx;
+  color: #4e5969;
+  font-weight: 500;
+}
+
+.auto-sell-logs-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+}
+
+.auto-sell-logs-count {
+  font-size: 20rpx;
+  color: #86909c;
+}
+
+.auto-sell-logs-refresh {
+  font-size: 22rpx;
+  color: #1677ff;
+  padding: 2rpx 8rpx;
+}
+
+.auto-sell-logs-error {
+  padding: 6rpx 0;
+  font-size: 22rpx;
+  color: #f53f3f;
+}
+
+.auto-sell-logs-empty {
+  padding: 6rpx 0;
+  font-size: 22rpx;
+  color: #86909c;
+}
+
+.auto-sell-log-item {
+  padding: 8rpx 0;
+  font-size: 22rpx;
+  line-height: 1.5;
+  border-bottom: 1rpx solid #f2f3f5;
+}
+
+.auto-sell-log-item:last-child {
+  border-bottom: none;
+}
+
+.auto-sell-log-line1 {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+}
+
+.auto-sell-log-time {
+  flex-shrink: 0;
+  color: #86909c;
+}
+
+.auto-sell-log-tag {
+  flex-shrink: 0;
+  padding: 0 8rpx;
+  font-size: 20rpx;
+  color: #4e5969;
+  background: #f2f3f5;
+  border-radius: 4rpx;
+}
+
+.auto-sell-log-trigger {
+  flex-shrink: 0;
+  padding: 0 8rpx;
+  font-size: 20rpx;
+  color: #1677ff;
+  background: #eef6ff;
+  border-radius: 4rpx;
+}
+
+.auto-sell-log-msg {
+  margin-top: 4rpx;
+  color: #1d2129;
+  word-break: break-all;
+}
+
+/* ===== 自动接单日志弹层 ===== */
+.log-panel {
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4rpx 0 10rpx;
+}
+
+.log-count {
+  font-size: 22rpx;
+  color: #86909c;
+}
+
+.log-actions {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+/* 立即检查诊断结果 */
+.diag-box {
+  margin-bottom: 10rpx;
+  padding: 10rpx 14rpx;
+  background: #f7f8fa;
+  border: 1rpx solid #e5e6eb;
+  border-radius: 8rpx;
+}
+
+.diag-line {
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #4e5969;
+  word-break: break-all;
+}
+
+.log-scroll {
+  flex: 1;
+  max-height: 56vh;
+}
+
+.status-empty.error {
+  color: #f53f3f;
+}
+
+.auto-sell-log-item.ok .auto-sell-log-msg {
+  color: #00a870;
+}
+
+.auto-sell-log-item.bad .auto-sell-log-msg {
+  color: #f53f3f;
+}
+
 /* ===== 交易列表弹层 ===== */
 .trade-panel {
   max-height: 82vh;
@@ -338,6 +614,31 @@
 .filter-switch {
   transform: scale(0.8);
   transform-origin: right center;
+}
+
+.filter-left,
+.filter-right {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.filter-right .filter-label {
+  font-size: 22rpx;
+  color: #86909c;
+}
+
+.sort-garden-value {
+  max-width: 180rpx;
+  padding: 2rpx 10rpx;
+  font-size: 22rpx;
+  color: #1677ff;
+  background: #eef6ff;
+  border: 1rpx solid #b8d4ff;
+  border-radius: 6rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 求购大厅：各花园今日「已卖/剩余可卖」，单行精简 */

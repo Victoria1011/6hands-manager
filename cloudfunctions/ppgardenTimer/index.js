@@ -438,6 +438,26 @@ async function ppOrders(cookie, role) {
   return []
 }
 
+// 交易终态：这些状态不再占用站点「同时只能有一笔进行中交易」的名额
+const ORDER_DONE_STATUS = [
+  'settled', 'cancelled', 'canceled', 'expired', 'closed', 'failed', 'refunded', 'rejected',
+  '已完成', '已取消', '已过期', '已关闭', '已失败', '已退款'
+]
+
+// 是否「进行中」的交易（占用唯一交易名额）。站点现在同一时间只允许一笔进行中的交易，
+// 有进行中的交易时无法接新单。
+function isOrderActive(o) {
+  if (!o) return false
+  if (o.settledAt) return false // 已有结算时间的肯定不是进行中
+  const done = st => ORDER_DONE_STATUS.indexOf(String(st || '').toLowerCase()) !== -1
+  const legs = Array.isArray(o.legs) ? o.legs.filter(Boolean) : []
+  if (legs.length) {
+    return legs.some(l => l.status != null ? !done(l.status) : (o.status != null && !done(o.status)))
+  }
+  if (o.status == null || o.status === '') return false
+  return !done(o.status)
+}
+
 // 求购列表：GET /api/trade/requests?channel=official
 // 返回数组，元素含 { id, orderId, flowerId, quality, groups, pricePerGroup, sellPrice?, deadlineAt, ... }
 // 兼容数组或 { items/requests/list: [] }
@@ -515,6 +535,7 @@ async function ppSellQuote(cookie, requestId, quiet) {
     '/api/trade/requests/' + encodeURIComponent(requestId) + '/self-quote'
   ]
   let lastErr = null
+  let lastJson = null
   for (const p of paths) {
     const res = await httpRequest({ path: p, cookie, timeoutMs: 12000 })
     if (!quiet) {
@@ -526,10 +547,50 @@ async function ppSellQuote(cookie, requestId, quiet) {
       err.status = 401
       throw err
     }
-    if (res.status === 200 && res.json) return res.json
+    if (res.status === 200 && res.json) {
+      // 返回体里根本没有「可卖腿」字段（可能是错误体/换了结构）时，换下一个路径再试；
+      // 明确返回了空数组则说明确实没有可卖腿，不再多打一次请求
+      if (pickSellers(res.json)) return res.json
+      lastJson = res.json
+      continue
+    }
     lastErr = new Error('查询卖花报价失败：HTTP ' + res.status)
   }
+  if (lastJson) return lastJson
   throw lastErr || new Error('查询卖花报价失败')
+}
+
+// 从 sell-quote 的返回里取出「各花园可卖腿」数组，兼容多种嵌套结构，
+// 避免接口把数组包在 data/quote/result 里时被当成「无可卖腿」。
+// 找不到任何数组时返回 null（用于区分「结构不认」和「确实为空数组」）
+function pickSellers(json) {
+  if (!json || typeof json !== 'object') return null
+  if (Array.isArray(json)) return json
+  const cands = [
+    json.sellers,
+    json.sellerLegs,
+    json.legs,
+    json.items,
+    json.data && (Array.isArray(json.data) ? json.data
+      : (json.data.sellers || json.data.sellerLegs || json.data.legs)),
+    json.quote && (json.quote.sellers || json.quote.sellerLegs),
+    json.result && (json.result.sellers || json.result.sellerLegs)
+  ]
+  for (const c of cands) if (Array.isArray(c)) return c
+  return null
+}
+
+// 从求购条目里取出「各花园可卖腿」数组（兼容 sellerLegs/sellers/legs 三种字段名）
+function pickLegs(o) {
+  if (!o || typeof o !== 'object') return []
+  const cands = [
+    o.sellerLegs,
+    o.sellers,
+    o.legs,
+    o.data && (o.data.sellerLegs || o.data.sellers || o.data.legs)
+  ]
+  for (const c of cands) if (Array.isArray(c)) return c
+  return []
 }
 
 // 接单卖花：POST /api/trade/requests/{requestId}/accept
@@ -621,7 +682,7 @@ async function attachSellQuotes(acc, items, maxItems) {
           hit++
         } else {
           const quote = await withSession(acc, c => ppSellQuote(c, it.requestId, true))
-          sellers = (quote && (quote.sellers || quote.sellerLegs)) || []
+          sellers = pickSellers(quote) || []
           _quoteCache[it.requestId] = { at: now, sellers }
         }
         if (!sellers.length) return
@@ -692,6 +753,7 @@ async function refreshAccountStock(acc) {
           'items数:', list.length,
           '样本:', JSON.stringify(list.slice(0, 2)))
         let gardenStockTotal = 0
+        let gardenSellableTotal = 0 // summary 缺失时用明细兜底算可卖组数
         const perFlower = {}
         for (const li of list) {
           if (!li) continue
@@ -701,6 +763,11 @@ async function refreshAccountStock(acc) {
           const key = fid + '_' + quality
           // 库存数量直接取 count（花朵朵数），不做组数换算
           const qty = Number(li.count) || 0
+          // 可卖组数：优先 sellableGroups，其次 groups，最后按 1 组 = 25 朵估算
+          const liSellable = Number(li.sellableGroups)
+          const liGroups = Number(li.groups)
+          gardenSellableTotal += liSellable > 0 ? liSellable
+            : (liGroups > 0 ? liGroups : Math.floor(qty / 25))
           const prev = perFlower[key]
           perFlower[key] = {
             count: (prev ? prev.count : 0) + qty,
@@ -730,6 +797,10 @@ async function refreshAccountStock(acc) {
           gardenId: g.id,
           gardenName: g.name || g.id,
           stockCount: gardenStockTotal,
+          // summary.sellableGroups 可能缺失，此时用明细汇总兜底，避免「有货却显示 0 组」
+          sellableGroups: (summary && Number(summary.sellableGroups) > 0)
+            ? Number(summary.sellableGroups)
+            : gardenSellableTotal,
           totalGroups: summary ? summary.totalGroups : null,
           listedKinds: summary ? summary.listedKinds : null,
           summary
@@ -741,6 +812,7 @@ async function refreshAccountStock(acc) {
           gardenId: g.id,
           gardenName: g.name || g.id,
           stockCount: 0,
+          sellableGroups: 0,
           error: e.message || '查询失败'
         })
       }
@@ -1580,8 +1652,19 @@ async function handleTimerTick() {
     return { skipped: 'master_disabled', results: autoResults }
   }
 
+  // 自动接单优先于托管调度执行：runCycle 遍历所有账号/花园可能耗时较久，
+  // 若放在后面容易把自动接单挤到云函数超时之后，导致「有单却从不接」。
+  // 每分钟都会进来，具体某账号是否执行由它自己的「检测间隔」决定（见 runAutoSellAll）
+  let sellResults = []
+  try {
+    sellResults = await runAutoSellAll(accounts || [])
+  } catch (e) {
+    console.error('[PPGarden][自动接单] 本轮异常:', e.message)
+  }
+
   const results = await runCycle(accounts)
-  return { results: autoResults.concat(results) }
+
+  return { results: autoResults.concat(sellResults, results) }
 }
 
 // ==================== 手动操作处理 ====================
@@ -1596,6 +1679,17 @@ function maskAccount(acc) {
     lastLoginDate: acc.lastLoginDate || null,
     loginErrorDate: acc.loginErrorDate || null,
     hostingCache: acc.hostingCache || null,
+    // 自动接单开关与最低价格（分钟/组）
+    autoSellEnabled: acc.autoSellEnabled === true,
+    autoSellMinPrice: acc.autoSellMinPrice != null ? Number(acc.autoSellMinPrice) : 40,
+    // 检测间隔（分钟）
+    autoSellIntervalMin: clampAutoSellInterval(acc.autoSellIntervalMin),
+    autoSellLastRunAt: acc.autoSellLastRunAt || null,
+    // 接单时段（东八区 HH:mm），默认 01:30 ~ 23:59（00:00 ~ 01:30 站点无法接单）
+    autoSellStartTime: acc.autoSellStartTime || '01:30',
+    autoSellEndTime: acc.autoSellEndTime || '23:59',
+    // 最近一次自动接单检查结果（云端写入）
+    autoSellStatus: acc.autoSellStatus || null,
     createdAt: acc.createdAt || null
   }
 }
@@ -1656,6 +1750,12 @@ async function handleAdd(event) {
       // 每小时去重标记（key = gardenId_时段序号）
       doneStart: {},
       doneStop: {},
+      // 自动接单：关闭 + 默认最低 40 分钟/组 + 每 2 分钟检测 + 默认时段 01:30 ~ 23:59
+      autoSellEnabled: false,
+      autoSellMinPrice: 40,
+      autoSellIntervalMin: AUTO_SELL_DEFAULT_INTERVAL_MIN,
+      autoSellStartTime: '01:30',
+      autoSellEndTime: '23:59',
       createdAt: db.serverDate(),
       updatedAt: db.serverDate()
     }
@@ -2342,9 +2442,37 @@ async function handleAccountPanel(event) {
   return { code: 0, message: 'success', data: { accounts: out, errors } }
 }
 
+// 日志记录 -> 客户端展示结构
+function mapLogRow(l) {
+  return {
+    id: l._id,
+    ts: l.createdAt ? new Date(l.createdAt).getTime() : 0,
+    timeText: l.createdAt ? fmtCstMs(new Date(l.createdAt).getTime()) : '',
+    action: l.action || '',
+    trigger: l.trigger || '',
+    kind: l.kind || '',
+    actionText: l.kind === 'check' ? '自动接单检查'
+      : l.action === 'start' ? '启动托管'
+        : l.action === 'pause' ? '暂停托管'
+          : l.action === 'sell' ? '接单卖花'
+            : '登录',
+    triggerText: l.trigger === 'timer' ? '定时'
+      : l.trigger === 'auto' ? (l.action === 'sell' ? '自动' : '自动暂停')
+      : l.trigger === 'redeem' ? '兑换码'
+      : '手动',
+    success: !!l.success,
+    message: l.message || ''
+  }
+}
+
 // 读取某账号执行日志（按时间倒序分页；beforeMs 向更早翻页，afterMs 拉取更新）
-async function loadAccountLogs(accountId, beforeMs, limit, afterMs) {
+// onlyAutoSell=true 时只返回自动接单日志（action=sell + trigger=auto）
+async function loadAccountLogs(accountId, beforeMs, limit, afterMs, onlyAutoSell) {
   let cond = { accountId }
+  if (onlyAutoSell) {
+    cond.action = 'sell'
+    cond.trigger = 'auto'
+  }
   if (beforeMs > 0) cond.createdAt = _.lt(new Date(beforeMs))
   else if (afterMs > 0) cond.createdAt = _.gt(new Date(afterMs))
   const res = await db.collection(LOGS_COLL)
@@ -2354,16 +2482,54 @@ async function loadAccountLogs(accountId, beforeMs, limit, afterMs) {
     .get()
   const rows = (res.data || []).slice(0, limit)
   return {
-    logs: rows.map(l => ({
-      id: l._id,
-      ts: l.createdAt ? new Date(l.createdAt).getTime() : 0,
-      timeText: l.createdAt ? fmtCstMs(new Date(l.createdAt).getTime()) : '',
-      actionText: l.action === 'start' ? '启动托管' : l.action === 'pause' ? '暂停托管' : '登录',
-      triggerText: l.trigger === 'timer' ? '定时' : l.trigger === 'auto' ? '自动暂停' : l.trigger === 'redeem' ? '兑换码' : '手动',
-      success: !!l.success,
-      message: l.message || ''
-    })),
+    logs: rows.map(mapLogRow),
     complete: (res.data || []).length <= limit
+  }
+}
+
+// 兜底扫描：按账号分页读取日志，再内存筛选自动接单记录
+async function scanAutoSellLogs(accountId, cap, maxScan) {
+  const out = []
+  let scanned = 0
+  let beforeMs = 0
+  while (out.length < cap && scanned < maxScan) {
+    const page = await loadAccountLogs(accountId, beforeMs, 50)
+    if (!page.logs.length) break
+    scanned += page.logs.length
+    for (const l of page.logs) {
+      if (l.action === 'sell' && l.trigger === 'auto') out.push(l)
+    }
+    const last = page.logs[page.logs.length - 1]
+    beforeMs = last && last.ts ? last.ts : 0
+    if (page.complete || !beforeMs) break
+  }
+  console.log('[PPGarden][日志][自动接单] 扫描', scanned, '条日志，命中', out.length, '条自动接单')
+  return out.slice(0, cap)
+}
+
+// 读取某账号全部自动接单日志（分页拉取直到取完或达到上限）
+async function loadAllAutoSellLogs(accountId, max) {
+  const cap = Math.min(Math.max(Number(max) || 300, 1), 500)
+  try {
+    // 优先使用「账号 + 动作 + 触发」条件查询（需组合索引，缺失时可能报错或命中为空）
+    const out = []
+    let beforeMs = 0
+    while (out.length < cap) {
+      const page = await loadAccountLogs(accountId, beforeMs, 50, 0, true)
+      if (!page.logs.length) break
+      out.push.apply(out, page.logs)
+      const last = page.logs[page.logs.length - 1]
+      beforeMs = last && last.ts ? last.ts : 0
+      if (page.complete || !beforeMs) break
+    }
+    console.log('[PPGarden][日志][自动接单] 条件查询命中', out.length, '条, account:', accountId)
+    if (out.length) return out.slice(0, cap)
+    // 命空时回退扫描最近日志核对（无组合索引时查询可能扫不到数据）
+    return await scanAutoSellLogs(accountId, cap, 300)
+  } catch (e) {
+    console.warn('[PPGarden][日志] 自动接单条件查询失败，改为内存筛选:', e.message,
+      '（建议为 ppgarden_logs 建组合索引 accountId+action+trigger+createdAt）')
+    return await scanAutoSellLogs(accountId, cap, 1000)
   }
 }
 
@@ -2376,9 +2542,15 @@ async function handleAccountLogs(event) {
   const beforeMs = Number(event.before) || 0
   const afterMs = Number(event.after) || 0
   try {
-    const page = await loadAccountLogs(accountId, beforeMs, limit, afterMs)
+    // 全部自动接单日志（不分页，一次返回）
+    if (event.allAutoSell === true) {
+      const logs = await loadAllAutoSellLogs(accountId)
+      return { code: 0, message: 'success', data: { logs, complete: true } }
+    }
+    const page = await loadAccountLogs(accountId, beforeMs, limit, afterMs, event.onlyAutoSell === true)
     return { code: 0, message: 'success', data: page }
   } catch (err) {
+    console.error('[PPGarden] 加载日志失败:', err.message)
     return { code: 500, message: err.message || '加载日志失败' }
   }
 }
@@ -2843,7 +3015,7 @@ async function handleAcceptRequest(event) {
     let sellableGroups = 0
     try {
       const quote = await withSession(acc, c => ppSellQuote(c, requestId))
-      const sellers = (quote && (quote.sellers || quote.sellerLegs)) || []
+      const sellers = pickSellers(quote) || []
       const leg = sellers.find(x => x && x.gardenId === gardenId)
       if (leg) {
         sellableGroups = Number(leg.groups)
@@ -2884,6 +3056,578 @@ async function handleAcceptRequest(event) {
     console.error('[PPGarden] 接单失败:', err.message)
     return { code: 500, message: err.message || '接单失败' }
   }
+}
+
+// ==================== 自动接单 ====================
+// 规则：求购价格 ≥ autoSellMinPrice（分钟/组）且 sell-quote 给出可卖腿时自动接单。
+//      站点现在同一时间只允许一笔进行中的交易：有进行中的交易就跳过本轮，接成功 1 单即停。
+//      库存 summary 只用于排序与提示，不作为跳过条件（与手动接单口径一致）。
+const AUTO_SELL_MAX_PER_TICK = 1   // 每轮最多接 1 单（站点限制：同时只能有一笔进行中交易）
+const AUTO_SELL_MAX_GROUPS = 9     // 单次接单最多 9 组
+const AUTO_SELL_MAX_QUOTES_PER_TICK = 12 // 每轮最多请求几次报价（防超时；同求购只报一次）
+const AUTO_SELL_MAX_ID_PROBES = 6  // 报价为空时，换另一个 id 重试的次数上限
+// 检测间隔（分钟）：每个账号可单独设置，1 ~ 1440 分钟，默认 2 分钟
+const AUTO_SELL_DEFAULT_INTERVAL_MIN = 2
+const AUTO_SELL_INTERVAL_MIN_LIMIT = 1
+const AUTO_SELL_INTERVAL_MAX_LIMIT = 1440
+// 接单时段（东八区 HH:mm），默认 01:30 ~ 23:59：
+// 站点每天 00:00 ~ 01:30 无法接单，故默认从 01:30 开始
+const AUTO_SELL_DEFAULT_START = '01:30'
+const AUTO_SELL_DEFAULT_END = '23:59'
+
+// 规范化「检测间隔」：非法值回退默认值，并限制在 1 ~ 1440 分钟
+function clampAutoSellInterval(v) {
+  const n = Math.round(Number(v))
+  if (!Number.isFinite(n)) return AUTO_SELL_DEFAULT_INTERVAL_MIN
+  return Math.min(AUTO_SELL_INTERVAL_MAX_LIMIT, Math.max(AUTO_SELL_INTERVAL_MIN_LIMIT, n))
+}
+
+// 'HH:mm' -> 当日分钟数；非法返回 null
+function parseHmToMin(v) {
+  if (typeof v !== 'string') return null
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim())
+  if (!m) return null
+  const h = Number(m[1])
+  const mi = Number(m[2])
+  if (!Number.isFinite(h) || !Number.isFinite(mi) || h > 23 || mi > 59) return null
+  return h * 60 + mi
+}
+
+// 是否在接单时段内；start > end 视为跨天（如 21:00 ~ 08:00）
+function inAutoSellWindow(now, startMin, endMin) {
+  if (startMin === null || endMin === null) return true
+  if (startMin === endMin) return true
+  const m = now.getUTCHours() * 60 + now.getUTCMinutes()
+  return startMin < endMin
+    ? (m >= startMin && m < endMin)
+    : (m >= startMin || m < endMin)
+}
+
+// 保存自动接单配置（action: setAutoSell）
+async function handleSetAutoSell(event) {
+  await ensureCollections()
+  const _id = event._id
+  if (!_id) return { code: 400, message: '缺少 _id' }
+  const patch = { updatedAt: db.serverDate() }
+  if (event.enabled !== undefined) patch.autoSellEnabled = !!event.enabled
+  if (event.minPrice !== undefined) {
+    const v = Number(event.minPrice)
+    patch.autoSellMinPrice = Number.isFinite(v) && v > 0 ? v : 40
+  }
+  // 检测间隔（分钟）：1 ~ 1440
+  if (event.intervalMin !== undefined) {
+    const v = Number(event.intervalMin)
+    if (!Number.isFinite(v) || v < AUTO_SELL_INTERVAL_MIN_LIMIT || v > AUTO_SELL_INTERVAL_MAX_LIMIT) {
+      return { code: 400, message: '检测间隔应为 1 ~ ' + AUTO_SELL_INTERVAL_MAX_LIMIT + ' 分钟' }
+    }
+    patch.autoSellIntervalMin = Math.round(v)
+  }
+  // 接单时段（HH:mm），前端用时间选择器传入
+  if (event.startTime !== undefined) {
+    const v = String(event.startTime || '').trim()
+    if (parseHmToMin(v) === null) return { code: 400, message: '接单开始时间格式应为 HH:mm' }
+    patch.autoSellStartTime = v
+  }
+  if (event.endTime !== undefined) {
+    const v = String(event.endTime || '').trim()
+    if (parseHmToMin(v) === null) return { code: 400, message: '接单结束时间格式应为 HH:mm' }
+    patch.autoSellEndTime = v
+  }
+
+  // 开启前先校验：必须至少有一个花园有可卖组数，否则不允许开启
+  if (patch.autoSellEnabled === true) {
+    let acc
+    try {
+      const res = await db.collection(ACCOUNTS_COLL).doc(_id).get()
+      acc = res.data
+    } catch (e) {
+      return { code: 404, message: '账号不存在' }
+    }
+    if (!acc) return { code: 404, message: '账号不存在' }
+
+    let stock
+    try {
+      stock = await refreshAccountStock(acc)
+    } catch (e) {
+      console.error('[PPGarden][自动接单] 开启前刷新库存失败:', e.message)
+      return { code: 500, message: '刷新花园库存失败，无法开启：' + (e.message || '未知错误') }
+    }
+    const list = Array.isArray(stock.gardens) ? stock.gardens : []
+    if (list.length && list.every(g => g && g.error)) {
+      return { code: 500, message: '查询花园库存失败，无法开启自动接单' }
+    }
+    const totalSellable = list.reduce((n, g) => n +
+      (Number(g && g.sellableGroups) || (g && g.summary && Number(g.summary.sellableGroups)) || 0), 0)
+    console.log('[PPGarden][自动接单] 开启前库存校验:', acc.remark || acc.username, '可卖组数合计:', totalSellable)
+    if (totalSellable <= 0) {
+      return { code: 400, message: '所有花园可卖组数为 0，暂时无法开启自动接单' }
+    }
+  }
+
+  await db.collection(ACCOUNTS_COLL).doc(_id).update({ data: patch })
+  console.log('[PPGarden][自动接单] 配置已更新:', _id, JSON.stringify(patch))
+  return { code: 0, message: '已保存', data: patch }
+}
+
+// 记录自动接单最近一次检查结果（写回账号，便于在页面直接看到）
+async function saveAutoSellStatus(acc, text) {
+  try {
+    await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+      data: { autoSellStatus: { text, at: Date.now() } }
+    })
+  } catch (e) { /* 写入失败不影响主流程 */ }
+}
+
+// 自动接单「检查」日志：没接到单时也留痕，便于确认定时任务是否在跑
+// 为免日志刷屏：结果与上次相同且未满 10 分钟则不重复写
+const AUTO_SELL_CHECK_LOG_INTERVAL_MS = 10 * 60 * 1000
+
+async function logAutoSellCheck(acc, text) {
+  try {
+    const prev = acc.autoSellLastLog || null
+    const now = Date.now()
+    if (prev && prev.text === text && now - (prev.at || 0) < AUTO_SELL_CHECK_LOG_INTERVAL_MS) return
+    await saveLog({
+      accountId: acc._id,
+      username: acc.username,
+      remark: acc.remark || '',
+      gardenId: '',
+      gardenName: '',
+      action: 'sell',
+      trigger: 'auto',
+      kind: 'check',
+      success: true,
+      message: '自动接单检查：' + text,
+      detail: { check: true },
+      createdAt: db.serverDate()
+    })
+    acc.autoSellLastLog = { text, at: now }
+    await db.collection(ACCOUNTS_COLL).doc(acc._id).update({
+      data: { autoSellLastLog: { text, at: now } }
+    }).catch(() => {})
+  } catch (e) { /* 写日志失败不影响主流程 */ }
+}
+
+// 处理单个账号的自动接单，返回简要结果
+// diag 可选：{ steps: [] }，用于「立即检查」返回每一步的判定过程
+async function runAutoSellForAccount(acc, diag) {
+  const steps = diag && Array.isArray(diag.steps) ? diag.steps : null
+  const step = msg => { if (steps) steps.push(msg) }
+  const stop = async (skipped) => {
+    step('结束：' + skipped)
+    await saveAutoSellStatus(acc, skipped)
+    await logAutoSellCheck(acc, skipped)
+    return { type: 'autoSell', account: acc.remark || acc.username, skipped }
+  }
+
+  if (acc.autoSellEnabled !== true) {
+    step('账号未开启自动接单')
+    return null
+  }
+  const minPrice = Number(acc.autoSellMinPrice) || 40
+  const accName = acc.remark || acc.username
+  step('账号：' + accName + '，最低价格：' + minPrice + ' 分钟/组，检测间隔：每 ' +
+    clampAutoSellInterval(acc.autoSellIntervalMin) + ' 分钟')
+
+  // 0) 接单时段：默认 01:30 ~ 23:59（站点 00:00 ~ 01:30 无法接单）
+  const startStr = acc.autoSellStartTime || AUTO_SELL_DEFAULT_START
+  const endStr = acc.autoSellEndTime || AUTO_SELL_DEFAULT_END
+  const startMin = parseHmToMin(startStr)
+  const endMin = parseHmToMin(endStr)
+  if (!inAutoSellWindow(nowCST(), startMin, endMin)) {
+    console.log('[PPGarden][自动接单] 不在接单时段(' + startStr + '-' + endStr + ')，跳过:', accName)
+    return await stop('不在接单时段 ' + startStr + '-' + endStr)
+  }
+  step('时段检查通过（' + startStr + '-' + endStr + '）')
+
+  // 0.5) 站点规则：同一账号同时只能有一笔进行中的交易，存在时无法接新单。
+  //      有进行中的交易就本轮跳过，等它结算后下一轮自动继续。
+  try {
+    const orders = await withSession(acc, c => ppOrders(c, 'sell'))
+    const active = (orders || []).filter(isOrderActive)
+    step('交易记录：共 ' + (orders || []).length + ' 条，进行中 ' + active.length + ' 条')
+    if (active.length) {
+      const a0 = active[0]
+      const a0Leg = Array.isArray(a0.legs) ? a0.legs.find(l => l && l.status) : null
+      const oid = a0.orderId != null ? a0.orderId : a0.id
+      const st = a0.status || (a0Leg && a0Leg.status) || '未知'
+      const msg = '有进行中的交易（订单 ' + oid + '，状态 ' + st + '），等完成后自动继续'
+      console.log('[PPGarden][自动接单]', msg, accName, JSON.stringify(a0).slice(0, 300))
+      return await stop(msg)
+    }
+  } catch (e) {
+    // 查询失败不阻塞：站点本身也会拒绝并发接单，仅记录提示
+    step('查询进行中交易失败（继续尝试接单）：' + e.message)
+    console.error('[PPGarden][自动接单] 查询交易记录失败:', accName, e.message)
+  }
+
+  // 1) 花园列表：直接用账号已同步的 gardenList，避免库存接口异常时整轮被跳过
+  let gardens = (Array.isArray(acc.gardenList) ? acc.gardenList : []).map(g => ({
+    gardenId: g.id,
+    gardenName: g.name || g.id,
+    sellable: 0
+  }))
+  // 库存只用于排序与提示（能否接以 sell-quote 为准），失败也继续
+  try {
+    const stock = await refreshAccountStock(acc)
+    const stockGardens = (stock.gardens || []).map(g => ({
+      gardenId: g.gardenId,
+      gardenName: g.gardenName,
+      sellable: Number(g.sellableGroups) || (g.summary && Number(g.summary.sellableGroups)) || 0
+    }))
+    if (!gardens.length) {
+      gardens = stockGardens
+    } else {
+      const byId = {}
+      for (const sg of stockGardens) byId[sg.gardenId] = sg
+      for (const g of gardens) {
+        const sg = byId[g.gardenId]
+        if (sg) g.sellable = sg.sellable
+      }
+    }
+  } catch (e) {
+    step('库存刷新失败（继续按报价尝试）：' + e.message)
+    console.error('[PPGarden][自动接单] 库存刷新失败，继续按报价尝试:', accName, e.message)
+  }
+  const totalSellable = gardens.reduce((n, g) => n + (g.sellable > 0 ? g.sellable : 0), 0)
+  step('库存：' + (gardens.map(g => g.gardenName + ' ' + g.sellable + ' 组').join('，') || '无花园'))
+  if (!gardens.length) {
+    console.log('[PPGarden][自动接单] 账号未同步花园，跳过:', accName)
+    return await stop('账号未同步花园（请先「从网站刷新花园」）')
+  }
+  // 注意：库存接口的 summary.sellableGroups 可能缺失或滞后，不能作为硬性跳过条件
+  //（求购大厅/手动接单都以 sell-quote 的实时可卖组数为准），这里仅作提示
+  if (totalSellable <= 0) {
+    console.log('[PPGarden][自动接单] 库存接口可卖为 0，继续按报价尝试:', accName)
+    step('库存接口可卖 0 组，继续按报价尝试')
+  } else {
+    step('可卖组数合计：' + totalSellable)
+  }
+
+  // 1.5) 「我可卖的花朵」：站点按 花朵+品质 汇总的可卖库存。
+  //      用来优先给真正卖得掉的单报价，否则报价次数会被「价格高但卖不掉」的单吃光，
+  //      真正可接的单反而一次都没报过价（求购大厅里看到的就是这批）。
+  let sellableKeys = null
+  try {
+    const list = await withSession(acc, c => ppSellableStock(c))
+    const sums = {}
+    for (const s of list || []) {
+      if (!s) continue
+      const k = String(s.flowerId) + '_' + (s.quality || 0)
+      sums[k] = (sums[k] || 0) + (Number(s.sellableGroups) || 0)
+    }
+    let keys = Object.keys(sums).filter(k => sums[k] > 0)
+    let noGroupsField = false
+    // 接口没给 sellableGroups 字段时，退化为「接口返回的都算可卖」
+    if (!keys.length) {
+      keys = Object.keys(sums)
+      noGroupsField = keys.length > 0
+    }
+    sellableKeys = keys.length ? new Set(keys) : null
+    step('我可卖的花朵：' + (sellableKeys ? sellableKeys.size : 0) + ' 种' +
+      (noGroupsField ? '（接口未给可卖组数，按全部花朵优先）' : ''))
+  } catch (e) {
+    step('查询我可卖库存失败（按价格优先报价）：' + e.message)
+    console.error('[PPGarden][自动接单] 查询 sellable-stock 失败:', accName, e.message)
+  }
+
+  // 2) 求购列表：只保留「只看我能卖的」且价格达标的订单，
+  //    并记录每个花园在该求购上的可卖组数（站点 sellerLegs 已按花园给出）
+  let raw
+  try {
+    raw = await withSession(acc, c => ppTradeRequests(c))
+  } catch (e) {
+    return await stop('拉取求购失败：' + e.message)
+  }
+  const rawCount = (raw || []).length
+  // 诊断：打印一条原始求购，便于核对字段（sellerLegs/id 形态）
+  if (raw && raw.length) step('求购样本：' + JSON.stringify(raw[0]).slice(0, 400))
+  const orders = []
+  let stateSkipped = 0 // 已结束/自己发的/对方排队满/对方游戏中/已暂停
+  let priceSkipped = 0 // 价格未达标
+  for (const o of raw || []) {
+    if (!o || o.status !== 'open' || o.mine || o.buyerQueueFull || o.buyerPlaying || o.pausedReason) {
+      stateSkipped++
+      continue
+    }
+    if (!(Number(o.pricePerGroup) >= minPrice)) {
+      priceSkipped++
+      continue
+    }
+    const legs = pickLegs(o)
+    const legGroups = {} // gardenId -> 该花园在此求购上的可卖组数（优先 groups，兼容 sellableGroups）
+    for (const s of legs) {
+      if (!s || !s.gardenId || s.blockText) continue
+      const n = Number(s.groups) || Number(s.sellableGroups) || 0
+      legGroups[s.gardenId] = Math.max(0, n)
+    }
+    orders.push({
+      order: o,
+      legGroups,
+      hasLegs: legs.length > 0,
+      key: String(o.flowerId) + '_' + (o.quality || 0) // 与 sellable-stock 的 key 对齐
+    })
+  }
+  step('求购：共 ' + rawCount + ' 条，价格≥' + minPrice + ' 分钟/组且可交易 ' + orders.length +
+    ' 条（价格不足 ' + priceSkipped + ' 条，其它不可接 ' + stateSkipped + ' 条）')
+  if (!orders.length) {
+    const msg = '无达标求购：共 ' + rawCount + ' 条，价格<' + minPrice + ' 分钟/组 ' + priceSkipped +
+      ' 条，已结束/自己发布/排队满/对方游戏中/暂停 ' + stateSkipped + ' 条'
+    console.log('[PPGarden][自动接单]', msg, accName)
+    return await stop(msg)
+  }
+
+  // 3) 逐花园处理：每个花园按「该花园在该求购上的可卖组数」排序后依次接单
+  const done = []
+  let failed = 0
+  let noLegCount = 0 // 报价/列表都无可卖腿的次数
+  let noQuoteSkipped = 0 // 报价预算用尽、本轮没报过价的次数
+  let totalQuotes = 0
+  const attempted = {}
+  const failCount = {} // requestId -> 本轮接单失败次数（换花园重试有上限）
+  const unquoted = {} // requestId -> 本轮因预算用尽未报价
+  const quotedWith = {} // requestId -> 实际报出可卖腿/用于接单的 id（requestId 或 id）
+  let idProbes = 0 // 用另一个 id 重试报价的次数上限
+  const quoteCache = {} // requestId -> 各花园可卖腿（同一轮复用，避免重复报价）
+  // 有库存的花园先试；库存显示 0 的也排队尝试（库存快照可能滞后，能否接以报价为准）
+  const gardenQueue = gardens.slice().sort((a, b) => (b.sellable || 0) - (a.sellable || 0))
+  for (const g of gardenQueue) {
+    if (done.length >= AUTO_SELL_MAX_PER_TICK) break
+
+    // 注意：列表里的 sellerLegs 可能缺失或为 0，但 sell-quote 仍可能可卖
+    //（手动接单也是以报价为准），因此这里不按列表腿硬过滤，只用它做排序优先级
+    const list = orders.filter(x => {
+      const rid = x.order.requestId != null ? x.order.requestId : x.order.id
+      return rid != null && !attempted[rid]
+    })
+    // 排序：我能卖的花朵优先 → 本花园列表腿数 → 价格
+    const sellableScore = x => (sellableKeys && sellableKeys.has(x.key)) ? 1 : 0
+    list.sort((a, b) =>
+      (sellableScore(b) - sellableScore(a)) ||
+      ((b.legGroups[g.gardenId] || 0) - (a.legGroups[g.gardenId] || 0)) ||
+      ((Number(b.order.pricePerGroup) || 0) - (Number(a.order.pricePerGroup) || 0)))
+
+    step('花园 ' + g.gardenName + '（可卖 ' + g.sellable + ' 组）：候选 ' + list.length + ' 条')
+    if (list.length) {
+      console.log('[PPGarden][自动接单] 花园候选(按本花园库存排序):', g.gardenName,
+        JSON.stringify(list.slice(0, 5).map(x => ({
+          requestId: x.order.requestId != null ? x.order.requestId : x.order.id,
+          price: x.order.pricePerGroup,
+          stock: x.legGroups[g.gardenId] || 0
+        }))))
+    }
+
+    for (const item of list) {
+      if (done.length >= AUTO_SELL_MAX_PER_TICK) break
+      const o = item.order
+      const requestId = o.requestId != null ? o.requestId : o.id
+      if (requestId == null) continue
+      try {
+        // 同一轮内同一求购只报价一次，多个花园复用结果
+        let sellers = quoteCache[requestId]
+        if (sellers === undefined) {
+          if (totalQuotes >= AUTO_SELL_MAX_QUOTES_PER_TICK) {
+            // 本轮报价预算已用尽：不再发请求，退回列表腿信息；没腿的留到下轮再报
+            unquoted[requestId] = true
+            sellers = []
+          } else {
+            totalQuotes++
+            // 前 3 次保留原始响应日志，便于确认报价结构与「不可卖」原因
+            const quote = await withSession(acc, c => ppSellQuote(c, requestId, totalQuotes > 3))
+            sellers = pickSellers(quote) || []
+            quoteCache[requestId] = sellers
+            if (totalQuotes <= 2) {
+              step('报价样本 ' + requestId + '：' + JSON.stringify(quote).slice(0, 400))
+            }
+            // 列表里同时有 requestId / id / orderId 多个标识；报价为空时换另一个再试，
+            // 若能报出可卖腿，说明站点内部 id 才是对的，本单接单也用该 id
+            const altIds = [o.id, o.orderId].filter(v =>
+              v != null && String(v) !== String(requestId))
+            for (const altId of altIds) {
+              if (sellers.length || idProbes >= AUTO_SELL_MAX_ID_PROBES) break
+              idProbes++
+              const alt = await withSession(acc, c => ppSellQuote(c, altId, true))
+              const altSellers = pickSellers(alt) || []
+              if (altSellers.length) {
+                sellers = altSellers
+                quoteCache[requestId] = sellers
+                quotedWith[requestId] = altId
+                step('求购 ' + requestId + ' 用 id ' + altId + ' 报价成功，本单改用 id 接单')
+              }
+            }
+          }
+        }
+        // 优先用当前花园这条腿；若报价里没有该花园（或为 0），回退到任意可卖花园腿，
+        // 与旧版/手动接单保持一致，避免明明能接却因花园顺序被跳过
+        const usable = sellers.filter(s => s && s.gardenId && !s.blockText &&
+          ((Number(s.groups) || 0) > 0 || (Number(s.sellableGroups) || 0) > 0))
+        let leg = usable.find(s => s.gardenId === g.gardenId)
+        if (!leg) {
+          leg = usable.slice().sort((a, b) =>
+            ((Number(b.groups) || Number(b.sellableGroups) || 0) -
+              (Number(a.groups) || Number(a.sellableGroups) || 0)))[0]
+        }
+        let legGroupsNum = leg ? (Number(leg.groups) || Number(leg.sellableGroups) || 0) : 0
+        let gardenIdToUse = leg && leg.gardenId ? leg.gardenId : g.gardenId
+        // 报价里完全没有可卖腿时，回退用列表里的腿数（手动接单也是按传入组数直接下单）
+        if (legGroupsNum <= 0) {
+          const gid = item.legGroups[g.gardenId] ? g.gardenId
+            : Object.keys(item.legGroups).find(k => (item.legGroups[k] || 0) > 0)
+          if (gid) {
+            gardenIdToUse = gid
+            legGroupsNum = item.legGroups[gid] || 0
+          }
+        }
+        if (legGroupsNum <= 0) {
+          if (unquoted[requestId]) {
+            noQuoteSkipped++
+            step('求购 ' + requestId + ' 本轮报价次数已用尽（下轮再试）')
+          } else {
+            noLegCount++
+            // 报价有腿但都不可用（组数为 0 / 被 blockText 挡）时，打印前两条便于核对原因
+            if (sellers.length && noLegCount <= 2) {
+              step('报价腿明细 ' + requestId + '：' + JSON.stringify(sellers.slice(0, 3)).slice(0, 300))
+            }
+            step('求购 ' + requestId + ' 无可卖组数（报价与列表都没有可卖腿）')
+          }
+          continue
+        }
+
+        const totalGroups = o.totalGroups != null ? Number(o.totalGroups) : Number(o.groups)
+        const takenGroups = o.takenGroups != null ? Number(o.takenGroups) : 0
+        let remaining = o.remainingGroups != null
+          ? Number(o.remainingGroups)
+          : Math.max(0, (Number.isFinite(totalGroups) ? totalGroups : 0) - takenGroups)
+        // 剩余组数缺失/为 0 时，回退到该花园可卖组数（与手动接单口径一致）
+        if (!(remaining > 0)) remaining = legGroupsNum
+        const groups = Math.min(legGroupsNum, remaining, AUTO_SELL_MAX_GROUPS)
+        if (groups <= 0) continue
+
+        const gname = (gardens.find(x => x.gardenId === gardenIdToUse) || {}).gardenName ||
+          g.gardenName || gardenIdToUse
+        // 报价若用的是站点内部 id，接单也必须用同一个
+        const acceptId = quotedWith[requestId] != null ? quotedWith[requestId] : requestId
+        const json = await withSession(acc, c =>
+          ppAcceptRequest(c, acceptId, groups, o.pricePerGroup, gardenIdToUse, o.targetCount))
+        const orderId = json && json.orderId != null ? json.orderId : null
+        const message = '自动接单成功：花朵 ' + o.flowerId + ' ' + groups + ' 组 × ' + o.pricePerGroup +
+          ' 分钟/组（' + gname + '）' + (orderId ? ' 订单 ' + orderId : '')
+        console.log('[PPGarden][自动接单]', message)
+        await saveLog({
+          accountId: acc._id,
+          username: acc.username,
+          remark: acc.remark || '',
+          gardenId: gardenIdToUse,
+          gardenName: gname,
+          action: 'sell',
+          trigger: 'auto',
+          success: true,
+          message,
+          detail: { requestId, orderId, groups, pricePerGroup: o.pricePerGroup, gardenId: gardenIdToUse },
+          createdAt: db.serverDate()
+        })
+        done.push({ requestId, gardenId: gardenIdToUse, groups, price: o.pricePerGroup })
+        attempted[requestId] = true // 本轮已成交，避免其它花园重复接同一单
+        // 扣减实际接单花园的可卖组数
+        const used = gardens.find(x => x.gardenId === gardenIdToUse)
+        if (used) used.sellable = Math.max(0, used.sellable - groups)
+      } catch (e) {
+        // 失败可能只是该花园不可卖，先不锁死，换个花园还能试；同一单失败 2 次才跳过
+        failCount[requestId] = (failCount[requestId] || 0) + 1
+        if (failCount[requestId] >= 2) attempted[requestId] = true
+        failed++
+        const msg = '自动接单失败：' + (e.message || '未知错误')
+        console.error('[PPGarden][自动接单]', msg)
+        step('接单失败：' + (e.message || '未知错误'))
+        await saveLog({
+          accountId: acc._id,
+          username: acc.username,
+          remark: acc.remark || '',
+          gardenId: g.gardenId,
+          gardenName: g.gardenName,
+          action: 'sell',
+          trigger: 'auto',
+          success: false,
+          message: msg + '（求购 ' + requestId + '）',
+          detail: { requestId, pricePerGroup: o.pricePerGroup, gardenId: g.gardenId },
+          createdAt: db.serverDate()
+        })
+      }
+    }
+  }
+
+  let statusText
+  if (done.length) {
+    statusText = '本轮接单 ' + done.length + ' 单' + (failed ? '，失败 ' + failed + ' 单' : '')
+  } else {
+    statusText = failed
+      ? '有 ' + orders.length + ' 条达标求购，接单失败 ' + failed + ' 次'
+      : '有 ' + orders.length + ' 条达标求购，但报价未给出可接组数（报价 ' + totalQuotes +
+        ' 次，无腿 ' + noLegCount + ' 次，未报价 ' + noQuoteSkipped + ' 次；库存/上架/冷却限制）'
+  }
+  console.log('[PPGarden][自动接单]', statusText, ', 账号:', accName)
+  await saveAutoSellStatus(acc, statusText)
+  // 没有接到单时补一条「检查」日志，避免看起来像没执行
+  if (!done.length) await logAutoSellCheck(acc, statusText)
+  step('结束：' + statusText)
+  return { type: 'autoSell', account: accName, done, statusText }
+}
+
+// 立即对某个账号执行一次自动接单，并返回每一步的诊断信息（action: autoSellRun）
+async function handleAutoSellRun(event) {
+  const _id = event._id
+  if (!_id) return { code: 400, message: '缺少 _id' }
+  await ensureCollections()
+  let acc
+  try {
+    acc = (await db.collection(ACCOUNTS_COLL).doc(_id).get()).data
+  } catch (e) {
+    return { code: 404, message: '账号不存在' }
+  }
+  if (!acc) return { code: 404, message: '账号不存在' }
+
+  const diag = { steps: [] }
+  try {
+    // 总开关状态：关闭时定时任务不会自动执行自动接单
+    const state = await ensureGlobalState().catch(() => null)
+    diag.steps.push('定时任务总开关：' + (state && state.masterEnabled === false
+      ? '关闭（自动接单不会自动执行，仅手动检查有效）'
+      : '开启'))
+    const result = await runAutoSellForAccount(acc, diag)
+    return { code: 0, message: '执行完成', data: { result, steps: diag.steps } }
+  } catch (err) {
+    console.error('[PPGarden][自动接单] 手动诊断失败:', err.message)
+    diag.steps.push('执行异常：' + (err.message || '未知错误'))
+    return { code: 500, message: err.message || '执行失败', data: { steps: diag.steps } }
+  }
+}
+
+// 对所有开启自动接单的账号跑一轮（每分钟调用一次，按各账号自己的「检测间隔」决定是否真跑）
+async function runAutoSellAll(accounts) {
+  const now = Date.now()
+  const list = (accounts || []).filter(a => {
+    if (!a || a.autoSellEnabled !== true || a.enabled === false) return false
+    const interval = clampAutoSellInterval(a.autoSellIntervalMin)
+    const last = Number(a.autoSellLastRunAt) || 0
+    // 预留 5 秒容错，避免定时器抖动导致「差几秒」被跳过
+    return now - last >= interval * 60000 - 5000
+  })
+  if (!list.length) return []
+  const out = []
+  for (const acc of list) {
+    // 先写入本次执行时间，防止同一分钟内重复触发；写库失败不影响本次执行
+    try {
+      await db.collection(ACCOUNTS_COLL).doc(acc._id)
+        .update({ data: { autoSellLastRunAt: now } })
+    } catch (e) { /* 忽略 */ }
+    try {
+      const r = await runAutoSellForAccount(acc)
+      if (r) out.push(r)
+    } catch (e) {
+      console.error('[PPGarden][自动接单] 账号处理异常:', acc.username, e.message)
+    }
+  }
+  return out
 }
 
 // ==================== 入口 ====================
@@ -2954,6 +3698,10 @@ exports.main = async (event, context) => {
         return await handleGardenStock(event)
       case 'acceptRequest':
         return await handleAcceptRequest(event)
+      case 'setAutoSell':
+        return await handleSetAutoSell(event)
+      case 'autoSellRun':
+        return await handleAutoSellRun(event)
       case 'logs':
         return await handleLogs(event)
       case 'runSchedule': {
